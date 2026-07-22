@@ -1,0 +1,12 @@
+{
+  "name": "انبار پسته",
+  "short_name": "انبار پسته",
+  "description": "ردیاب موجودی فیزیکی انبار پسته",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7fee7",
+  "theme_color": "#166534",
+  "dir": "rtl",
+  "lang": "fa",
+  "icons": []
+}
