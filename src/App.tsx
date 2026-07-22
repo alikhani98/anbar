@@ -8,7 +8,7 @@ import {
 } from "react";
 import { db, type Batch, type Photo } from "./db";
 
-type Route = "/" | "/search" | "/new-batch";
+type Route = "/" | "/search" | "/new-batch" | "/settings";
 
 type FormErrors = Partial<
   Record<
@@ -33,11 +33,28 @@ type BatchWithPhotos = Batch & {
   photoUrls: string[];
 };
 
+type BackupBatch = Batch & {
+  id?: number;
+};
+
+type BackupPhoto = {
+  id?: number;
+  batchId: number;
+  imageDataUrl: string;
+};
+
+type BackupFile = {
+  app: "pistachio-warehouse-tracker";
+  version: 1;
+  exportedAtJalali: string;
+  batches: BackupBatch[];
+  photos: BackupPhoto[];
+};
+
 type FormState = {
   pistachioType: string;
   customPistachioType: string;
   grade: string;
-  saltedWhite: boolean;
   ounceGrade: string;
   kernelPercent: string;
   totalWeightKg: string;
@@ -52,13 +69,11 @@ const pistachioTypes = ["احمدآقایی", "اکبری", "آجیلی", "کل�
 const listedPistachioTypes = pistachioTypes.filter((type) => type !== "سایر");
 const grades = ["اعلا", "معمولی"];
 const gradeFilters = ["فرقی ندارد", ...grades];
-const saltedFilters = ["فرقی ندارد", "شور سفید", "بدون نمک"];
 
 const initialFormState: FormState = {
   pistachioType: "",
   customPistachioType: "",
   grade: "",
-  saltedWhite: false,
   ounceGrade: "",
   kernelPercent: "",
   totalWeightKg: "",
@@ -72,7 +87,7 @@ const initialFormState: FormState = {
 function getRoute(): Route {
   const path = window.location.pathname;
 
-  if (path === "/search" || path === "/new-batch") {
+  if (path === "/search" || path === "/new-batch" || path === "/settings") {
     return path;
   }
 
@@ -122,6 +137,62 @@ function sortByOldestEntry(a: Batch, b: Batch) {
   return a.entryDateJalali.localeCompare(b.entryDateJalali);
 }
 
+function blobToDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => resolve(String(reader.result));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function dataUrlToBlob(dataUrl: string) {
+  const [metadata, base64Data] = dataUrl.split(",");
+
+  if (!metadata?.startsWith("data:") || !base64Data) {
+    throw new Error("Invalid image data.");
+  }
+
+  const mimeType = metadata.slice(5, metadata.indexOf(";")) || "application/octet-stream";
+  const binary = atob(base64Data);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return new Blob([bytes], { type: mimeType });
+}
+
+function normalizeBackupBatch(record: unknown): BackupBatch {
+  if (!record || typeof record !== "object") {
+    throw new Error("Invalid batch.");
+  }
+
+  const batch = record as Partial<BackupBatch>;
+  const normalized: BackupBatch = {
+    pistachioType: String(batch.pistachioType ?? ""),
+    grade: String(batch.grade ?? ""),
+    ounceGrade: Number(batch.ounceGrade ?? 0),
+    kernelPercent: Number(batch.kernelPercent ?? 0),
+    totalWeightKg: Number(batch.totalWeightKg ?? 0),
+    sackCount: Number(batch.sackCount ?? 0),
+    remainingWeightKg: Number(batch.remainingWeightKg ?? 0),
+    owner: String(batch.owner ?? ""),
+    entryDateJalali: String(batch.entryDateJalali ?? ""),
+    location: String(batch.location ?? ""),
+    notes: String(batch.notes ?? ""),
+    status:
+      batch.status === "رزرو شده" || batch.status === "تمام شده" ? batch.status : "موجود",
+  };
+
+  if (typeof batch.id === "number") {
+    normalized.id = batch.id;
+  }
+
+  return normalized;
+}
+
 export function App() {
   const [route, setRoute] = useState<Route>(getRoute);
 
@@ -140,12 +211,23 @@ export function App() {
     return <NewBatchForm />;
   }
 
+  if (route === "/settings") {
+    return <SettingsScreen />;
+  }
+
   return <Home />;
 }
 
 function Home() {
   return (
     <main className="min-h-screen bg-lime-50 px-5 py-8 text-zinc-950 sm:px-8">
+      <button
+        className="absolute left-5 top-5 rounded-lg px-3 py-2 text-lg font-bold text-zinc-600 underline decoration-2 underline-offset-4"
+        type="button"
+        onClick={() => navigateTo("/settings")}
+      >
+        تنظیمات
+      </button>
       <section className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-3xl flex-col items-stretch justify-center gap-8">
         <div className="text-center">
           <h1 className="text-4xl font-black leading-tight sm:text-5xl">
@@ -177,10 +259,200 @@ function Home() {
   );
 }
 
+function SettingsScreen() {
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [restoring, setRestoring] = useState(false);
+  const restoreInputRef = useRef<HTMLInputElement>(null);
+
+  async function exportBackup() {
+    setMessage("");
+    setError("");
+
+    try {
+      const batches = await db.batches.toArray();
+      const photos = await db.photos.toArray();
+      const backup: BackupFile = {
+        app: "pistachio-warehouse-tracker",
+        version: 1,
+        exportedAtJalali: getTodayJalali(),
+        batches: batches.map(normalizeBackupBatch),
+        photos: await Promise.all(
+          photos.map(async (photo) => ({
+            id: photo.id,
+            batchId: photo.batchId,
+            imageDataUrl: await blobToDataUrl(photo.imageBlob),
+          })),
+        ),
+      };
+      const json = JSON.stringify(backup, null, 2);
+      const url = URL.createObjectURL(
+        new Blob([json], { type: "application/json;charset=utf-8" }),
+      );
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `anbar-backup-${getTodayJalali().replace(/\//g, "-")}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setMessage(`نسخه پشتیبان آماده شد. تعداد بارها: ${formatKg(batches.length)}`);
+    } catch (backupError) {
+      console.error("Failed to export backup", backupError);
+      setError("دریافت نسخه پشتیبان انجام نشد. لطفا دوباره تلاش کنید.");
+    }
+  }
+
+  function requestRestoreFile() {
+    setMessage("");
+    setError("");
+    restoreInputRef.current?.click();
+  }
+
+  async function restoreBackup(file: File | undefined) {
+    if (!file) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "این کار اطلاعات فعلی را جایگزین می‌کند - ادامه می‌دهید؟",
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setRestoring(true);
+    setMessage("");
+    setError("");
+
+    try {
+      const parsed = JSON.parse(await file.text()) as Partial<BackupFile>;
+
+      if (
+        parsed.app !== "pistachio-warehouse-tracker" ||
+        !Array.isArray(parsed.batches) ||
+        !Array.isArray(parsed.photos)
+      ) {
+        throw new Error("Invalid backup file.");
+      }
+
+      const batches = parsed.batches.map(normalizeBackupBatch);
+      const photos = parsed.photos.map((photo) => {
+        if (
+          !photo ||
+          typeof photo !== "object" ||
+          typeof photo.batchId !== "number" ||
+          typeof photo.imageDataUrl !== "string"
+        ) {
+          throw new Error("Invalid photo record.");
+        }
+
+        const restoredPhoto = {
+          batchId: photo.batchId,
+          imageBlob: dataUrlToBlob(photo.imageDataUrl),
+        };
+
+        if (typeof photo.id === "number") {
+          return {
+            id: photo.id,
+            ...restoredPhoto,
+          };
+        }
+
+        return restoredPhoto;
+      });
+
+      await db.transaction("rw", db.batches, db.photos, async () => {
+        await db.photos.clear();
+        await db.batches.clear();
+
+        if (batches.length > 0) {
+          await db.batches.bulkPut(batches);
+        }
+
+        if (photos.length > 0) {
+          await db.photos.bulkPut(photos);
+        }
+      });
+
+      setMessage(`بازیابی انجام شد. تعداد بارهای بازیابی‌شده: ${formatKg(batches.length)}`);
+    } catch (restoreError) {
+      console.error("Failed to restore backup", restoreError);
+      setError("فایل نسخه پشتیبان معتبر نیست یا خراب شده است.");
+    } finally {
+      setRestoring(false);
+
+      if (restoreInputRef.current) {
+        restoreInputRef.current.value = "";
+      }
+    }
+  }
+
+  return (
+    <main className="min-h-screen bg-lime-50 px-5 py-8 text-zinc-950 sm:px-8">
+      <section className="mx-auto grid min-h-[calc(100vh-4rem)] w-full max-w-3xl content-center gap-6">
+        <header className="grid gap-4 text-center">
+          <h1 className="text-4xl font-black">تنظیمات</h1>
+          <p className="text-xl font-semibold text-zinc-700">
+            نسخه پشتیبان اطلاعات همین دستگاه
+          </p>
+        </header>
+
+        {message ? (
+          <div className="rounded-lg bg-emerald-800 px-5 py-4 text-2xl font-black text-white">
+            {message}
+          </div>
+        ) : null}
+
+        {error ? (
+          <div
+            className="rounded-lg border-2 border-red-700 bg-red-50 px-5 py-4 text-2xl font-black text-red-800"
+            role="alert"
+          >
+            {error}
+          </div>
+        ) : null}
+
+        <button
+          className="min-h-16 rounded-lg bg-emerald-800 px-6 text-2xl font-black text-white"
+          type="button"
+          onClick={exportBackup}
+        >
+          دریافت نسخه پشتیبان
+        </button>
+
+        <input
+          ref={restoreInputRef}
+          className="hidden"
+          type="file"
+          accept="application/json,.json"
+          onChange={(event) => restoreBackup(event.target.files?.[0])}
+        />
+        <button
+          className="min-h-16 rounded-lg bg-zinc-950 px-6 text-2xl font-black text-white disabled:bg-zinc-500"
+          type="button"
+          disabled={restoring}
+          onClick={requestRestoreFile}
+        >
+          {restoring ? "در حال بازیابی..." : "بازیابی از نسخه پشتیبان"}
+        </button>
+
+        <button
+          className="min-h-16 rounded-lg border-2 border-zinc-900 bg-white px-6 text-2xl font-black text-zinc-950"
+          type="button"
+          onClick={() => navigateTo("/")}
+        >
+          بازگشت
+        </button>
+      </section>
+    </main>
+  );
+}
+
 function SearchInventory() {
   const [pistachioType, setPistachioType] = useState("");
   const [grade, setGrade] = useState("فرقی ندارد");
-  const [saltedWhite, setSaltedWhite] = useState("فرقی ندارد");
   const [showReserved, setShowReserved] = useState(false);
   const [batches, setBatches] = useState<BatchWithPhotos[]>([]);
   const [selectedBatch, setSelectedBatch] = useState<BatchWithPhotos | null>(null);
@@ -247,14 +519,10 @@ function SearchInventory() {
           ? !listedPistachioTypes.includes(batch.pistachioType)
           : batch.pistachioType === pistachioType);
       const gradeMatches = grade === "فرقی ندارد" || batch.grade === grade;
-      const saltedMatches =
-        saltedWhite === "فرقی ندارد" ||
-        (saltedWhite === "شور سفید" && batch.saltedWhite) ||
-        (saltedWhite === "بدون نمک" && !batch.saltedWhite);
 
-      return typeMatches && gradeMatches && saltedMatches;
+      return typeMatches && gradeMatches;
     });
-  }, [batches, grade, pistachioType, saltedWhite]);
+  }, [batches, grade, pistachioType]);
 
   async function confirmDeduction() {
     if (!selectedBatch) {
@@ -316,14 +584,6 @@ function SearchInventory() {
 
           <Field label="درجه">
             <ChipGroup options={gradeFilters} value={grade} onChange={setGrade} />
-          </Field>
-
-          <Field label="شور سفید">
-            <ChipGroup
-              options={saltedFilters}
-              value={saltedWhite}
-              onChange={setSaltedWhite}
-            />
           </Field>
 
           <button
@@ -452,6 +712,29 @@ function BatchDetail({
   onClose: () => void;
   onConfirm: () => void;
 }) {
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const hasMultiplePhotos = batch.photoUrls.length > 1;
+
+  function showPreviousPhoto() {
+    setLightboxIndex((current) => {
+      if (current === null || batch.photoUrls.length === 0) {
+        return current;
+      }
+
+      return current === 0 ? batch.photoUrls.length - 1 : current - 1;
+    });
+  }
+
+  function showNextPhoto() {
+    setLightboxIndex((current) => {
+      if (current === null || batch.photoUrls.length === 0) {
+        return current;
+      }
+
+      return current === batch.photoUrls.length - 1 ? 0 : current + 1;
+    });
+  }
+
   return (
     <div className="fixed inset-0 z-20 overflow-y-auto bg-lime-50 px-4 py-5 text-zinc-950 sm:px-8">
       <section className="mx-auto grid w-full max-w-4xl gap-5 pb-8">
@@ -468,13 +751,19 @@ function BatchDetail({
 
         <section className="flex gap-4 overflow-x-auto pb-2">
           {batch.photoUrls.length > 0 ? (
-            batch.photoUrls.map((url) => (
-              <img
-                className="h-64 min-w-64 rounded-lg object-cover"
+            batch.photoUrls.map((url, index) => (
+              <button
+                className="min-h-64 min-w-64 overflow-hidden rounded-lg bg-zinc-100"
                 key={url}
-                src={url}
-                alt="عکس بار"
-              />
+                type="button"
+                onClick={() => setLightboxIndex(index)}
+              >
+                <img
+                  className="h-64 w-64 object-cover"
+                  src={url}
+                  alt="عکس بار"
+                />
+              </button>
             ))
           ) : (
             <div className="grid h-64 min-w-64 place-items-center rounded-lg bg-lime-100 text-6xl font-black text-emerald-800">
@@ -486,7 +775,6 @@ function BatchDetail({
         <section className="grid gap-3 rounded-lg bg-white p-4 text-xl font-semibold shadow-sm sm:grid-cols-2">
           <DetailRow label="نوع پسته" value={batch.pistachioType} />
           <DetailRow label="درجه" value={batch.grade} />
-          <DetailRow label="شور سفید" value={batch.saltedWhite ? "بله" : "خیر"} />
           <DetailRow label="انس" value={formatKg(batch.ounceGrade)} />
           <DetailRow label="درصد مغز" value={`${formatKg(batch.kernelPercent)}٪`} />
           <DetailRow label="وزن کل" value={`${formatKg(batch.totalWeightKg)} کیلو`} />
@@ -523,6 +811,60 @@ function BatchDetail({
           </button>
         </section>
       </section>
+
+      {lightboxIndex !== null && batch.photoUrls[lightboxIndex] ? (
+        <div className="fixed inset-0 z-30 grid bg-zinc-950/90 p-4 text-white">
+          <button
+            className="absolute right-4 top-4 z-10 min-h-16 min-w-16 rounded-lg bg-white px-5 text-4xl font-black text-zinc-950"
+            type="button"
+            aria-label="بستن عکس"
+            onClick={() => setLightboxIndex(null)}
+          >
+            ×
+          </button>
+
+          {hasMultiplePhotos ? (
+            <>
+              <button
+                className="absolute left-4 top-1/2 z-10 min-h-16 min-w-16 -translate-y-1/2 rounded-lg bg-white/95 px-5 text-4xl font-black text-zinc-950"
+                type="button"
+                aria-label="عکس قبلی"
+                onClick={showPreviousPhoto}
+              >
+                ‹
+              </button>
+              <button
+                className="absolute right-4 top-1/2 z-10 min-h-16 min-w-16 -translate-y-1/2 rounded-lg bg-white/95 px-5 text-4xl font-black text-zinc-950"
+                type="button"
+                aria-label="عکس بعدی"
+                onClick={showNextPhoto}
+              >
+                ›
+              </button>
+            </>
+          ) : null}
+
+          <button
+            className="grid h-full w-full place-items-center"
+            type="button"
+            aria-label="بستن پس‌زمینه عکس"
+            onClick={() => setLightboxIndex(null)}
+          >
+            <img
+              className="max-h-[88vh] max-w-full rounded-lg object-contain"
+              src={batch.photoUrls[lightboxIndex]}
+              alt="عکس بزرگ بار"
+              onClick={(event) => event.stopPropagation()}
+            />
+          </button>
+
+          {hasMultiplePhotos ? (
+            <div className="absolute bottom-5 left-1/2 -translate-x-1/2 rounded-lg bg-zinc-950/80 px-4 py-2 text-xl font-black">
+              {formatKg(lightboxIndex + 1)} از {formatKg(batch.photoUrls.length)}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -552,6 +894,7 @@ function NewBatchForm() {
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const photosRef = useRef<PhotoDraft[]>([]);
 
@@ -578,7 +921,6 @@ function NewBatchForm() {
       form.pistachioType !== "" ||
       form.customPistachioType !== "" ||
       form.grade !== "" ||
-      form.saltedWhite ||
       form.ounceGrade !== "" ||
       form.kernelPercent !== "" ||
       form.totalWeightKg !== "" ||
@@ -628,6 +970,7 @@ function NewBatchForm() {
   function updateField<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((current) => ({ ...current, [key]: value }));
     setErrors((current) => ({ ...current, [key]: undefined }));
+    setSaveError("");
   }
 
   function updateNumberField(
@@ -691,50 +1034,57 @@ function NewBatchForm() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setSaveError("");
 
     if (!validateForm()) {
+      setSaveError("لطفا خطاهای فرم را برطرف کنید.");
       return;
     }
 
     setSaving(true);
 
-    const totalWeightKg = normalizeNumber(form.totalWeightKg);
-    const batch: Batch = {
-      pistachioType: selectedPistachioType,
-      grade: form.grade,
-      saltedWhite: form.saltedWhite,
-      ounceGrade: normalizeNumber(form.ounceGrade) || 0,
-      kernelPercent: clamp(normalizeNumber(form.kernelPercent), 0, 100),
-      totalWeightKg,
-      sackCount: normalizeNumber(form.sackCount),
-      remainingWeightKg: totalWeightKg,
-      owner: form.owner.trim(),
-      entryDateJalali: form.entryDateJalali.trim(),
-      location: form.location.trim(),
-      notes: form.notes.trim(),
-      status: "موجود",
-    };
+    try {
+      const totalWeightKg = normalizeNumber(form.totalWeightKg);
+      const batch: Batch = {
+        pistachioType: selectedPistachioType,
+        grade: form.grade,
+        ounceGrade: normalizeNumber(form.ounceGrade) || 0,
+        kernelPercent: clamp(normalizeNumber(form.kernelPercent), 0, 100),
+        totalWeightKg,
+        sackCount: normalizeNumber(form.sackCount),
+        remainingWeightKg: totalWeightKg,
+        owner: form.owner.trim(),
+        entryDateJalali: form.entryDateJalali.trim(),
+        location: form.location.trim(),
+        notes: form.notes.trim(),
+        status: "موجود",
+      };
 
-    await db.transaction("rw", db.batches, db.photos, async () => {
-      const batchId = await db.batches.add(batch);
+      await db.transaction("rw", db.batches, db.photos, async () => {
+        const batchId = await db.batches.add(batch);
 
-      if (batchId === undefined) {
-        throw new Error("Batch id was not created.");
-      }
+        if (batchId === undefined) {
+          throw new Error("Batch id was not created.");
+        }
 
-      if (photos.length > 0) {
-        await db.photos.bulkAdd(
-          photos.map((photo) => ({
-            batchId,
-            imageBlob: photo.file,
-          })),
-        );
-      }
-    });
+        if (photos.length > 0) {
+          await db.photos.bulkAdd(
+            photos.map((photo) => ({
+              batchId,
+              imageBlob: photo.file,
+            })),
+          );
+        }
+      });
 
-    setSaving(false);
-    setSaved(true);
-    window.setTimeout(() => navigateTo("/"), 1400);
+      setSaved(true);
+      window.setTimeout(() => navigateTo("/"), 1400);
+    } catch (error) {
+      console.error("Failed to save new batch", error);
+      setSaveError("ذخیره بار انجام نشد. لطفا دوباره تلاش کنید.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   function handlePhotoSelection(files: FileList | null) {
@@ -806,6 +1156,15 @@ function NewBatchForm() {
           </button>
         </header>
 
+        {saveError ? (
+          <div
+            className="rounded-lg border-2 border-red-700 bg-red-50 px-5 py-4 text-2xl font-black text-red-800"
+            role="alert"
+          >
+            {saveError}
+          </div>
+        ) : null}
+
         <Field label="نوع پسته" error={errors.pistachioType}>
           <ChipGroup
             options={pistachioTypes}
@@ -829,25 +1188,6 @@ function NewBatchForm() {
             value={form.grade}
             onChange={(value) => updateField("grade", value)}
           />
-        </Field>
-
-        <Field label="شور سفید">
-          <button
-            className={`flex min-h-16 w-full items-center justify-between rounded-lg border-2 px-5 text-2xl font-bold ${
-              form.saltedWhite
-                ? "border-emerald-800 bg-emerald-800 text-white"
-                : "border-zinc-300 bg-white text-zinc-950"
-            }`}
-            type="button"
-            role="switch"
-            aria-checked={form.saltedWhite}
-            onClick={() => updateField("saltedWhite", !form.saltedWhite)}
-          >
-            <span>{form.saltedWhite ? "بله" : "خیر"}</span>
-            <span className="text-lg font-semibold">
-              {form.saltedWhite ? "فعال است" : "فعال نیست"}
-            </span>
-          </button>
         </Field>
 
         <NumberField

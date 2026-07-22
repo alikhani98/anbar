@@ -6,7 +6,6 @@ export interface Batch {
   id?: number;
   pistachioType: string;
   grade: string;
-  saltedWhite: boolean;
   ounceGrade: number;
   kernelPercent: number;
   totalWeightKg: number;
