@@ -309,8 +309,22 @@ function shouldShowBackupReminder(lastBackupMeta: BackupMetaRecord | null) {
   return elapsedDays >= backupReminderThresholdDays;
 }
 
+function toPersianDigits(value: string | number) {
+  return String(value).replace(/\d/g, (digit) => "۰۱۲۳۴۵۶۷۸۹"[Number(digit)] ?? digit);
+}
+
+function normalizeDigitsToEnglish(value: string) {
+  return value
+    .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)))
+    .replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)));
+}
+
+function formatDisplayText(value: string | number) {
+  return toPersianDigits(value);
+}
+
 function normalizeNumber(value: string) {
-  return Number(value.trim());
+  return Number(normalizeDigitsToEnglish(value).trim());
 }
 
 function normalizeOptionalNumber(value: string, min: number, max?: number) {
@@ -340,7 +354,11 @@ function clamp(value: number, min: number, max?: number) {
 }
 
 function formatKg(value: number) {
-  return new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 2 }).format(value);
+  return toPersianDigits(
+    new Intl.NumberFormat("en-US", { maximumFractionDigits: 2, useGrouping: false }).format(
+      value,
+    ),
+  );
 }
 
 function formatOptionalNumber(value: number | null | undefined) {
@@ -371,10 +389,20 @@ function getJalaliMonthKey(value: string) {
 
 function formatFileSize(bytes: number) {
   if (bytes < 1024 * 1024) {
-    return `${new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 1 }).format(bytes / 1024)} کیلوبایت`;
+    return `${formatDisplayText(
+      new Intl.NumberFormat("en-US", {
+        maximumFractionDigits: 1,
+        useGrouping: false,
+      }).format(bytes / 1024),
+    )} کیلوبایت`;
   }
 
-  return `${new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 1 }).format(bytes / (1024 * 1024))} مگابایت`;
+  return `${formatDisplayText(
+    new Intl.NumberFormat("en-US", {
+      maximumFractionDigits: 1,
+      useGrouping: false,
+    }).format(bytes / (1024 * 1024)),
+  )} مگابایت`;
 }
 
 function sortByOldestEntry(a: Batch, b: Batch) {
@@ -738,7 +766,7 @@ function Home() {
               </button>
               {lastBackupMeta ? (
                 <span className="self-center text-base font-semibold text-amber-900">
-                  آخرین نسخه پشتیبان: {lastBackupMeta.jalaliText}
+                  آخرین نسخه پشتیبان: {formatDisplayText(lastBackupMeta.jalaliText)}
                 </span>
               ) : null}
             </div>
@@ -858,8 +886,8 @@ function StatsScreen() {
   return (
     <main className="min-h-screen bg-lime-50 px-4 py-5 text-zinc-950 sm:px-8">
       <section className="mx-auto grid w-full max-w-6xl gap-5 pb-8">
-        <header className="sticky top-0 z-10 -mx-4 flex items-center justify-between gap-4 border-b border-lime-200 bg-lime-50/95 px-4 py-4 backdrop-blur sm:-mx-8 sm:px-8">
-          <div>
+        <header className="sticky top-0 z-10 -mx-4 flex flex-col items-stretch gap-4 border-b border-lime-200 bg-lime-50/95 px-4 py-4 backdrop-blur sm:-mx-8 sm:flex-row sm:items-center sm:justify-between sm:px-8">
+          <div className="min-w-0">
             <h1 className="text-3xl font-black sm:text-4xl">آمار</h1>
             <p className="mt-1 text-lg font-semibold text-zinc-600">
               نمای ساده از موجودی و روند ورود بار
@@ -895,7 +923,15 @@ function StatsScreen() {
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={stats.inventoryByType} margin={{ top: 12, right: 12, left: 0, bottom: 16 }}>
                       <CartesianGrid stroke={chartColors.grid} strokeDasharray="4 4" />
-                      <XAxis dataKey="name" tick={{ fontSize: 15 }} interval={0} angle={-10} textAnchor="end" height={54} />
+                      <XAxis
+                        dataKey="name"
+                        tick={{ fontSize: 15 }}
+                        tickFormatter={formatDisplayText}
+                        interval={0}
+                        angle={-10}
+                        textAnchor="end"
+                        height={54}
+                      />
                       <YAxis tickFormatter={formatKg} tick={{ fontSize: 15 }} width={72} />
                       <Tooltip content={<StatsTooltip valueLabel="موجودی" unit="کیلو" />} />
                       <Legend wrapperStyle={{ fontSize: "16px" }} formatter={() => "موجودی باقی‌مانده"} />
@@ -951,7 +987,11 @@ function StatsScreen() {
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={stats.monthlyEntries} margin={{ top: 12, right: 12, left: 0, bottom: 8 }}>
                       <CartesianGrid stroke={chartColors.grid} strokeDasharray="4 4" />
-                      <XAxis dataKey="month" tick={{ fontSize: 15 }} />
+                      <XAxis
+                        dataKey="month"
+                        tick={{ fontSize: 15 }}
+                        tickFormatter={formatDisplayText}
+                      />
                       <YAxis tickFormatter={formatKg} tick={{ fontSize: 15 }} width={72} />
                       <Tooltip content={<StatsTooltip valueLabel="ورودی" unit="کیلو" />} />
                       <Legend wrapperStyle={{ fontSize: "16px" }} formatter={() => "وزن کل ورودی"} />
@@ -1047,7 +1087,7 @@ function StatsTooltip({
   }
 
   const firstItem = payload[0];
-  const itemLabel = label ?? firstItem.payload?.name ?? firstItem.name ?? "";
+  const itemLabel = formatDisplayText(label ?? firstItem.payload?.name ?? firstItem.name ?? "");
 
   return (
     <div className="rounded-lg border border-zinc-200 bg-white px-4 py-3 text-base font-bold text-zinc-900 shadow-lg">
@@ -1638,7 +1678,7 @@ function SettingsScreen() {
             <h2 className="text-3xl font-black">نسخه پشتیبان</h2>
             <p className="text-xl font-semibold text-zinc-700">
               {lastBackupMeta
-                ? `آخرین نسخه پشتیبان: ${lastBackupMeta.jalaliText}`
+                ? `آخرین نسخه پشتیبان: ${formatDisplayText(lastBackupMeta.jalaliText)}`
                 : "هنوز نسخه پشتیبانی تهیه نشده"}
             </p>
           </div>
@@ -2263,7 +2303,7 @@ function SearchInventory() {
   return (
     <main className="min-h-screen bg-lime-50 px-4 py-5 text-zinc-950 sm:px-8">
       <section className="mx-auto grid w-full max-w-5xl gap-5 pb-56">
-        <header className="sticky top-0 z-10 -mx-4 flex items-center justify-between gap-4 border-b border-lime-200 bg-lime-50/95 px-4 py-4 backdrop-blur sm:-mx-8 sm:px-8">
+        <header className="sticky top-0 z-10 -mx-4 flex flex-col items-stretch gap-4 border-b border-lime-200 bg-lime-50/95 px-4 py-4 backdrop-blur sm:-mx-8 sm:flex-row sm:items-center sm:justify-between sm:px-8">
           <h1 className="text-3xl font-black">جستجوی موجودی</h1>
           <button
             className="min-h-14 rounded-lg border-2 border-zinc-900 bg-white px-5 text-xl font-black text-zinc-950"
@@ -2408,7 +2448,7 @@ function SearchInventory() {
                       <InlineField
                         icon={<CalendarFieldIcon />}
                         label="تاریخ ورود"
-                        value={batch.entryDateJalali}
+                        value={formatDisplayText(batch.entryDateJalali)}
                       />
                     </dl>
                   </div>
@@ -2778,9 +2818,9 @@ function BatchDetail({
   return (
     <div className="fixed inset-0 z-20 overflow-y-auto bg-lime-50 px-4 py-5 text-zinc-950 sm:px-8">
       <section className="mx-auto grid w-full max-w-4xl gap-5 pb-8">
-        <header className="sticky top-0 z-10 -mx-4 flex items-center justify-between gap-4 border-b border-lime-200 bg-lime-50/95 px-4 py-4 backdrop-blur sm:-mx-8 sm:px-8">
+        <header className="sticky top-0 z-10 -mx-4 flex flex-col items-stretch gap-4 border-b border-lime-200 bg-lime-50/95 px-4 py-4 backdrop-blur sm:-mx-8 sm:flex-row sm:items-center sm:justify-between sm:px-8">
           <h1 className="text-3xl font-black">جزئیات بار</h1>
-          <div className="flex gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row">
             <button
               className="min-h-14 rounded-lg bg-zinc-950 px-5 text-xl font-black text-white"
               type="button"
@@ -2861,7 +2901,7 @@ function BatchDetail({
           <DetailRow label="امانت" value={batch.isConsignment ? "بله" : "خیر"} />
           <DetailRow
             label="تاریخ ورود"
-            value={batch.entryDateJalali}
+            value={formatDisplayText(batch.entryDateJalali)}
             icon={<CalendarFieldIcon />}
           />
           <DetailRow
@@ -2892,7 +2932,7 @@ function BatchDetail({
                     className="rounded-lg bg-lime-50 px-4 py-3 text-xl font-bold text-zinc-800"
                     key={deduction.id ?? `${deduction.deductedAtJalali}-${deduction.amountKg}`}
                   >
-                    <span>{deduction.deductedAtJalali}</span>
+                    <span>{formatDisplayText(deduction.deductedAtJalali)}</span>
                     <span className="mx-2">-</span>
                     <span>{formatKg(deduction.amountKg)} کیلو</span>
                     {deduction.note ? <span> - {deduction.note}</span> : null}
@@ -3076,7 +3116,9 @@ function DetailRow({
       <div className="text-base font-black text-zinc-500">
         {icon ? <FieldLabelWithIcon icon={icon} label={label} /> : label}
       </div>
-      <div className="mt-1 break-words text-2xl font-black text-zinc-950">{value}</div>
+      <div className="mt-1 break-words text-2xl font-black text-zinc-950">
+        {formatDisplayText(value)}
+      </div>
     </div>
   );
 }
@@ -3239,11 +3281,12 @@ function NewBatchForm({
 
   function updateDatePart(part: "year" | "month" | "day", value: string) {
     const [year = "", month = "", day = ""] = form.entryDateJalali.split("/");
+    const normalizedValue = normalizeDigitsToEnglish(value);
     const next = {
       year,
       month,
       day,
-      [part]: value.replace(/\D/g, "").slice(0, part === "year" ? 4 : 2),
+      [part]: normalizedValue.replace(/\D/g, "").slice(0, part === "year" ? 4 : 2),
     };
 
     updateField("entryDateJalali", `${next.year}/${next.month}/${next.day}`);
@@ -3500,7 +3543,7 @@ function NewBatchForm({
   return (
     <main className="min-h-screen bg-lime-50 px-4 py-5 text-zinc-950 sm:px-8">
       <form className="mx-auto grid w-full max-w-3xl gap-6 pb-28" onSubmit={handleSubmit}>
-        <header className="sticky top-0 z-10 -mx-4 flex items-center justify-between gap-4 border-b border-lime-200 bg-lime-50/95 px-4 py-4 backdrop-blur sm:-mx-8 sm:px-8">
+        <header className="sticky top-0 z-10 -mx-4 flex flex-col items-stretch gap-4 border-b border-lime-200 bg-lime-50/95 px-4 py-4 backdrop-blur sm:-mx-8 sm:flex-row sm:items-center sm:justify-between sm:px-8">
           <h1 className="text-3xl font-black">
             {isEditing ? "ویرایش بار" : "ثبت بار جدید"}
           </h1>
@@ -3889,12 +3932,10 @@ function NumberField({
         <input
           className="min-h-16 min-w-0 rounded-lg border-2 border-zinc-300 bg-white px-4 text-center text-2xl font-black outline-none focus:border-emerald-800"
           inputMode="decimal"
-          type="number"
-          min={min}
-          max={max}
-          value={value}
+          type="text"
+          value={formatDisplayText(value)}
           onFocus={(event) => event.currentTarget.select()}
-          onChange={(event) => onChange(event.target.value)}
+          onChange={(event) => onChange(normalizeDigitsToEnglish(event.target.value))}
         />
         <button
           className="min-h-16 rounded-lg bg-zinc-900 text-4xl font-black leading-none text-white"
@@ -3929,9 +3970,9 @@ function JalaliDatePicker({
           pattern="[0-9]*"
           type="tel"
           maxLength={4}
-          value={year}
+          value={formatDisplayText(year)}
           onFocus={(event) => event.currentTarget.select()}
-          onChange={(event) => onChange("year", event.target.value)}
+          onChange={(event) => onChange("year", normalizeDigitsToEnglish(event.target.value))}
           placeholder="سال"
         />
         <input
@@ -3941,9 +3982,9 @@ function JalaliDatePicker({
           pattern="[0-9]*"
           type="tel"
           maxLength={2}
-          value={month}
+          value={formatDisplayText(month)}
           onFocus={(event) => event.currentTarget.select()}
-          onChange={(event) => onChange("month", event.target.value)}
+          onChange={(event) => onChange("month", normalizeDigitsToEnglish(event.target.value))}
           placeholder="ماه"
         />
         <input
@@ -3953,9 +3994,9 @@ function JalaliDatePicker({
           pattern="[0-9]*"
           type="tel"
           maxLength={2}
-          value={day}
+          value={formatDisplayText(day)}
           onFocus={(event) => event.currentTarget.select()}
-          onChange={(event) => onChange("day", event.target.value)}
+          onChange={(event) => onChange("day", normalizeDigitsToEnglish(event.target.value))}
           placeholder="روز"
         />
       </div>
