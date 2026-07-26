@@ -37,6 +37,7 @@ export interface Deduction {
 export interface PistachioTypeOption {
   id?: number;
   name: string;
+  defaultImageBlob?: Blob | null;
 }
 
 export interface AppearanceTypeOption {
@@ -133,6 +134,25 @@ db.version(5)
       .modify((batch) => {
         if (batch.appearanceType === undefined) {
           batch.appearanceType = null;
+        }
+      });
+  });
+
+db.version(6)
+  .stores({
+    batches: "++id,pistachioType,appearanceType,owner,entryDateJalali,location,status",
+    photos: "++id,batchId",
+    deductions: "++id,batchId,deductedAtJalali",
+    pistachioTypes: "++id,&name",
+    appearanceTypes: "++id,&name",
+  })
+  .upgrade(async (transaction) => {
+    await transaction
+      .table<PistachioTypeOption, number>("pistachioTypes")
+      .toCollection()
+      .modify((typeOption) => {
+        if (typeOption.defaultImageBlob === undefined) {
+          typeOption.defaultImageBlob = null;
         }
       });
   });

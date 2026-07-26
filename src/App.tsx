@@ -7,6 +7,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import pistachioPlaceholderUrl from "./assets/pistachio-placeholder.svg";
 import {
   db,
   defaultAppearanceTypeNames,
@@ -58,6 +59,7 @@ type BatchWithPhotos = Batch & {
   id: number;
   photoUrls: string[];
   thumbnailUrls: string[];
+  defaultImageUrl?: string;
   photos: BatchPhotoItem[];
   deductions: Deduction[];
 };
@@ -77,8 +79,9 @@ type BackupDeduction = Deduction & {
   id?: number;
 };
 
-type BackupPistachioType = PistachioTypeOption & {
+type BackupPistachioType = Omit<PistachioTypeOption, "defaultImageBlob"> & {
   id?: number;
+  defaultImageDataUrl?: string | null;
 };
 
 type BackupAppearanceType = AppearanceTypeOption & {
@@ -321,6 +324,10 @@ function normalizeBackupPistachioType(record: unknown): BackupPistachioType {
   const typeOption = record as Partial<BackupPistachioType>;
   const normalized: BackupPistachioType = {
     name: String(typeOption.name ?? "").trim(),
+    defaultImageDataUrl:
+      typeof typeOption.defaultImageDataUrl === "string"
+        ? typeOption.defaultImageDataUrl
+        : null,
   };
 
   if (!normalized.name) {
@@ -412,6 +419,10 @@ async function preparePhotoForStorage(file: File): Promise<PhotoDraft> {
     compressedSize: fullBlob.size,
     thumbnailSize: thumbnailBlob.size,
   };
+}
+
+async function prepareDefaultImageForStorage(file: File) {
+  return resizeImageToJpeg(file, 600, 0.78);
 }
 
 async function ensureThumbnailBlob(fullImageBlob: Blob, thumbnailBlob?: Blob) {
@@ -644,7 +655,15 @@ function SettingsScreen() {
           })),
         ),
         deductions: deductions.map(normalizeBackupDeduction),
-        pistachioTypes: pistachioTypesForBackup.map(normalizeBackupPistachioType),
+        pistachioTypes: await Promise.all(
+          pistachioTypesForBackup.map(async (typeOption) => ({
+            id: typeOption.id,
+            name: typeOption.name,
+            defaultImageDataUrl: typeOption.defaultImageBlob
+              ? await blobToDataUrl(typeOption.defaultImageBlob)
+              : null,
+          })),
+        ),
         appearanceTypes: appearanceTypesForBackup.map(normalizeBackupAppearanceType),
       };
       const json = JSON.stringify(backup, null, 2);
@@ -704,8 +723,22 @@ function SettingsScreen() {
         ? parsed.deductions.map(normalizeBackupDeduction)
         : [];
       const pistachioTypesForRestore = Array.isArray(parsed.pistachioTypes)
-        ? parsed.pistachioTypes.map(normalizeBackupPistachioType)
-        : defaultPistachioTypeNames.map((name) => ({ name }));
+        ? parsed.pistachioTypes.map((record) => {
+            const normalized = normalizeBackupPistachioType(record);
+            const restored: PistachioTypeOption = {
+              name: normalized.name,
+              defaultImageBlob: normalized.defaultImageDataUrl
+                ? dataUrlToBlob(normalized.defaultImageDataUrl)
+                : null,
+            };
+
+            if (typeof normalized.id === "number") {
+              restored.id = normalized.id;
+            }
+
+            return restored;
+          })
+        : defaultPistachioTypeNames.map((name) => ({ name, defaultImageBlob: null }));
       const appearanceTypesForRestore = Array.isArray(parsed.appearanceTypes)
         ? parsed.appearanceTypes.map(normalizeBackupAppearanceType)
         : defaultAppearanceTypeNames.map((name) => ({ name }));
@@ -886,6 +919,44 @@ function SettingsScreen() {
     }
   }
 
+  async function updatePistachioTypeDefaultImage(
+    typeOption: PistachioTypeOption,
+    file: File | undefined,
+  ) {
+    if (typeOption.id === undefined || !file) {
+      return;
+    }
+
+    clearSettingsMessages();
+
+    try {
+      const defaultImageBlob = await prepareDefaultImageForStorage(file);
+      await db.pistachioTypes.update(typeOption.id, { defaultImageBlob });
+      await refreshPistachioTypes();
+      setMessage("تصویر پیش‌فرض نوع پسته ذخیره شد.");
+    } catch (imageError) {
+      console.error("Failed to update pistachio type default image", imageError);
+      setError("ذخیره تصویر پیش‌فرض انجام نشد. لطفا تصویر دیگری انتخاب کنید.");
+    }
+  }
+
+  async function removePistachioTypeDefaultImage(typeOption: PistachioTypeOption) {
+    if (typeOption.id === undefined) {
+      return;
+    }
+
+    clearSettingsMessages();
+
+    try {
+      await db.pistachioTypes.update(typeOption.id, { defaultImageBlob: null });
+      await refreshPistachioTypes();
+      setMessage("تصویر پیش‌فرض نوع پسته حذف شد.");
+    } catch (imageError) {
+      console.error("Failed to remove pistachio type default image", imageError);
+      setError("حذف تصویر پیش‌فرض انجام نشد.");
+    }
+  }
+
   async function addAppearanceType() {
     const name = newAppearanceType.trim();
     clearSettingsMessages();
@@ -1061,9 +1132,15 @@ function SettingsScreen() {
           <div className="grid gap-3">
             {pistachioTypeOptions.map((typeOption) => (
               <div
-                className="grid gap-3 rounded-lg border-2 border-zinc-200 p-3 sm:grid-cols-[1fr_auto_auto]"
+                className="grid gap-3 rounded-lg border-2 border-zinc-200 p-3 sm:grid-cols-[auto_1fr_auto_auto]"
                 key={typeOption.id ?? typeOption.name}
               >
+                <PistachioTypeDefaultImageControl
+                  typeOption={typeOption}
+                  onRemove={() => removePistachioTypeDefaultImage(typeOption)}
+                  onSelect={(file) => updatePistachioTypeDefaultImage(typeOption, file)}
+                />
+
                 {editingTypeId === typeOption.id ? (
                   <input
                     className="min-h-14 rounded-lg border-2 border-zinc-300 bg-white px-4 text-2xl font-semibold outline-none focus:border-emerald-800"
@@ -1214,6 +1291,76 @@ function SettingsScreen() {
   );
 }
 
+function PistachioTypeDefaultImageControl({
+  typeOption,
+  onRemove,
+  onSelect,
+}: {
+  typeOption: PistachioTypeOption;
+  onRemove: () => void;
+  onSelect: (file: File | undefined) => void;
+}) {
+  const [imageUrl, setImageUrl] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!typeOption.defaultImageBlob) {
+      setImageUrl("");
+      return;
+    }
+
+    const url = URL.createObjectURL(typeOption.defaultImageBlob);
+    setImageUrl(url);
+
+    return () => URL.revokeObjectURL(url);
+  }, [typeOption.defaultImageBlob]);
+
+  return (
+    <div className="grid gap-2">
+      {imageUrl ? (
+        <img
+          className="h-20 w-20 rounded-lg object-cover"
+          src={imageUrl}
+          alt="تصویر پیش‌فرض نوع پسته"
+        />
+      ) : (
+        <PlaceholderPhoto className="h-20 w-20" />
+      )}
+      <input
+        ref={inputRef}
+        className="hidden"
+        type="file"
+        accept="image/*"
+        onChange={(event) => {
+          onSelect(event.target.files?.[0]);
+
+          if (inputRef.current) {
+            inputRef.current.value = "";
+          }
+        }}
+      />
+      <button
+        className="min-h-10 rounded-lg border-2 border-zinc-300 bg-white px-3 text-base font-black text-zinc-950"
+        type="button"
+        onClick={() => inputRef.current?.click()}
+      >
+        انتخاب تصویر
+      </button>
+      {typeOption.defaultImageBlob ? (
+        <button
+          className="min-h-10 rounded-lg border-2 border-red-700 bg-white px-3 text-base font-black text-red-800"
+          type="button"
+          onClick={onRemove}
+        >
+          حذف تصویر
+        </button>
+      ) : (
+        <div className="text-center text-sm font-bold text-zinc-500">بدون تصویر</div>
+      )}
+    </div>
+  );
+}
+
 function SearchInventory() {
   const [pistachioType, setPistachioType] = useState("");
   const [appearanceFilter, setAppearanceFilter] = useState(anyFilterLabel);
@@ -1255,6 +1402,17 @@ function SearchInventory() {
     const deductions = batchIds.length
       ? await db.deductions.where("batchId").anyOf(batchIds).toArray()
       : [];
+    const pistachioTypesWithDefaults = await db.pistachioTypes.toArray();
+    const defaultImageByType = pistachioTypesWithDefaults.reduce<Record<string, Blob>>(
+      (mapped, typeOption) => {
+        if (typeOption.defaultImageBlob) {
+          mapped[typeOption.name] = typeOption.defaultImageBlob;
+        }
+
+        return mapped;
+      },
+      {},
+    );
     const photosByBatch = photos.reduce<Record<number, Photo[]>>((grouped, photo) => {
       grouped[photo.batchId] = [...(grouped[photo.batchId] ?? []), photo];
       return grouped;
@@ -1289,12 +1447,22 @@ function SearchInventory() {
         });
         const photoUrls = photoItems.map((photo) => photo.fullUrl);
         const thumbnailUrls = photoItems.map((photo) => photo.thumbnailUrl);
+        const defaultImageBlob =
+          photoItems.length === 0 ? defaultImageByType[batch.pistachioType] : undefined;
+        const defaultImageUrl = defaultImageBlob
+          ? URL.createObjectURL(defaultImageBlob)
+          : undefined;
         photoUrlsRef.current.push(...photoUrls, ...thumbnailUrls);
+
+        if (defaultImageUrl) {
+          photoUrlsRef.current.push(defaultImageUrl);
+        }
 
         return {
           ...batch,
           photoUrls,
           thumbnailUrls,
+          defaultImageUrl,
           photos: photoItems,
           deductions: (deductionsByBatch[batch.id] ?? []).sort((first, second) =>
             second.deductedAtJalali.localeCompare(first.deductedAtJalali),
@@ -1679,7 +1847,7 @@ function SearchInventory() {
 }
 
 function BatchThumbnail({ batch }: { batch: BatchWithPhotos }) {
-  const thumbnailUrl = batch.thumbnailUrls[0] ?? batch.photoUrls[0];
+  const thumbnailUrl = batch.thumbnailUrls[0] ?? batch.photoUrls[0] ?? batch.defaultImageUrl;
 
   if (thumbnailUrl) {
     return (
@@ -1691,10 +1859,16 @@ function BatchThumbnail({ batch }: { batch: BatchWithPhotos }) {
     );
   }
 
+  return <PlaceholderPhoto className="h-28 w-28 sm:h-36 sm:w-36" />;
+}
+
+function PlaceholderPhoto({ className }: { className: string }) {
   return (
-    <div className="grid h-28 w-28 place-items-center rounded-lg bg-lime-100 text-5xl font-black text-emerald-800 sm:h-36 sm:w-36">
-      پ
-    </div>
+    <img
+      className={`rounded-lg object-cover ${className}`}
+      src={pistachioPlaceholderUrl}
+      alt="عکس ثبت نشده"
+    />
   );
 }
 
@@ -1922,9 +2096,15 @@ function BatchDetail({
               </button>
             ))
           ) : (
-            <div className="grid h-64 min-w-64 place-items-center rounded-lg bg-lime-100 text-6xl font-black text-emerald-800">
-              پ
-            </div>
+            batch.defaultImageUrl ? (
+              <img
+                className="h-64 min-w-64 rounded-lg object-cover"
+                src={batch.defaultImageUrl}
+                alt="تصویر پیش‌فرض نوع پسته"
+              />
+            ) : (
+              <PlaceholderPhoto className="h-64 min-w-64" />
+            )
           )}
         </section>
 
@@ -2092,9 +2272,15 @@ function CustomerDisplayView({
               />
             ))
           ) : (
-            <div className="grid h-[54vh] min-w-full place-items-center rounded-lg bg-lime-100 text-8xl font-black text-emerald-800 sm:h-[62vh]">
-              پ
-            </div>
+            batch.defaultImageUrl ? (
+              <img
+                className="h-[54vh] min-w-full snap-center rounded-lg object-contain sm:h-[62vh]"
+                src={batch.defaultImageUrl}
+                alt="تصویر پیش‌فرض نوع پسته"
+              />
+            ) : (
+              <PlaceholderPhoto className="h-[54vh] min-w-full sm:h-[62vh]" />
+            )
           )}
         </div>
 

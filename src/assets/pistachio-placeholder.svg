@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 240" role="img" aria-labelledby="title desc">
+  <title id="title">تصویر جایگزین بار پسته</title>
+  <desc id="desc">یک تصویر ساده و خنثی از کیسه پسته برای زمانی که عکس واقعی ثبت نشده است.</desc>
+  <rect width="320" height="240" rx="18" fill="#f4f4f5"/>
+  <path d="M101 76c0-16 14-28 30-25 17 3 42 3 59 0 16-3 30 9 30 25v5c0 8-7 15-15 15h-89c-8 0-15-7-15-15v-5Z" fill="#d4d4d8"/>
+  <path d="M95 86h130l-13 102c-2 14-14 24-28 24h-48c-14 0-26-10-28-24L95 86Z" fill="#e4e4e7"/>
+  <path d="M112 101h96l-10 82c-1 8-8 14-16 14h-44c-8 0-15-6-16-14l-10-82Z" fill="#fafafa"/>
+  <path d="M133 139c12-28 42-28 54 0 5 13-3 30-27 39-24-9-32-26-27-39Z" fill="#a3b18a"/>
+  <path d="M160 117c11 9 17 21 17 35 0 12-5 23-17 33-12-10-17-21-17-33 0-14 6-26 17-35Z" fill="#f0ead2"/>
+  <path d="M160 117c0 23 0 46 0 68" stroke="#7f8f64" stroke-width="5" stroke-linecap="round"/>
+  <path d="M116 86h88" stroke="#a1a1aa" stroke-width="10" stroke-linecap="round"/>
+  <path d="M121 63c21 9 57 9 78 0" stroke="#a1a1aa" stroke-width="8" stroke-linecap="round"/>
+  <text x="160" y="226" text-anchor="middle" font-family="Tahoma, Arial, sans-serif" font-size="18" font-weight="700" fill="#71717a">عکس ثبت نشده</text>
+</svg>
