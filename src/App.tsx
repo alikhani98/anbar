@@ -1472,11 +1472,18 @@ function SearchInventory() {
     setDetailNotice("ویرایش بار ذخیره شد");
   }
 
+  function handleEditDeleted() {
+    setEditingBatch(null);
+    setSelectedBatch(null);
+    navigateTo("/");
+  }
+
   if (editingBatch) {
     return (
       <NewBatchForm
         editingBatch={editingBatch}
         onEditCancel={() => setEditingBatch(null)}
+        onEditDeleted={handleEditDeleted}
         onEditSaved={handleEditSaved}
       />
     );
@@ -2140,10 +2147,12 @@ function DetailRow({
 function NewBatchForm({
   editingBatch,
   onEditCancel,
+  onEditDeleted,
   onEditSaved,
 }: {
   editingBatch?: BatchWithPhotos;
   onEditCancel?: () => void;
+  onEditDeleted?: () => void;
   onEditSaved?: (batchId: number) => void | Promise<void>;
 } = {}) {
   const isEditing = editingBatch !== undefined;
@@ -2162,8 +2171,10 @@ function NewBatchForm({
     editingBatch ? getPhotoDraftsFromBatch(editingBatch) : [],
   );
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [photoProcessing, setPhotoProcessing] = useState(false);
   const [compressionSummary, setCompressionSummary] = useState("");
@@ -2439,6 +2450,34 @@ function NewBatchForm({
     }
   }
 
+  async function confirmDelete() {
+    if (!editingBatch) {
+      return;
+    }
+
+    setDeleting(true);
+    setSaveError("");
+
+    try {
+      await db.transaction("rw", db.batches, db.photos, db.deductions, async () => {
+        await db.photos.where("batchId").equals(editingBatch.id).delete();
+        await db.deductions.where("batchId").equals(editingBatch.id).delete();
+        await db.batches.delete(editingBatch.id);
+      });
+
+      setShowDeleteConfirm(false);
+      setSaved(true);
+      window.setTimeout(() => {
+        onEditDeleted?.();
+      }, 1200);
+    } catch (error) {
+      console.error("Failed to delete batch", error);
+      setSaveError("حذف بار انجام نشد. لطفا دوباره تلاش کنید.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   async function handlePhotoSelection(files: FileList | null) {
     if (!files) {
       return;
@@ -2512,7 +2551,9 @@ function NewBatchForm({
           <div className="mx-auto grid h-28 w-28 place-items-center rounded-full bg-white text-6xl font-black text-emerald-800">
             ✓
           </div>
-          <h1 className="text-4xl font-black">بار جدید ثبت شد</h1>
+          <h1 className="text-4xl font-black">
+            {isEditing ? "بار حذف شد" : "بار جدید ثبت شد"}
+          </h1>
           <p className="text-2xl font-semibold">در حال بازگشت به خانه...</p>
         </section>
       </main>
@@ -2542,6 +2583,19 @@ function NewBatchForm({
           >
             {saveError}
           </div>
+        ) : null}
+
+        {isEditing ? (
+          <section className="flex justify-end">
+            <button
+              className="min-h-14 rounded-lg border-2 border-red-700 bg-white px-5 text-xl font-black text-red-800 disabled:border-zinc-400 disabled:text-zinc-500"
+              type="button"
+              disabled={saving || deleting || photoProcessing}
+              onClick={() => setShowDeleteConfirm(true)}
+            >
+              حذف
+            </button>
+          </section>
         ) : null}
 
         <Field label="نوع پسته" error={errors.pistachioType}>
@@ -2746,6 +2800,35 @@ function NewBatchForm({
                 onClick={() => setShowCancelConfirm(false)}
               >
                 ادامه ثبت
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {showDeleteConfirm ? (
+        <div className="fixed inset-0 z-30 grid place-items-center bg-zinc-950/75 px-5">
+          <section className="w-full max-w-xl rounded-lg bg-white p-5 text-center shadow-xl">
+            <h2 className="text-3xl font-black text-red-800">حذف بار؟</h2>
+            <p className="mt-3 text-xl font-semibold text-zinc-700">
+              این بار برای همیشه حذف می‌شود و قابل بازگشت نیست - ادامه می‌دهید؟
+            </p>
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              <button
+                className="min-h-16 rounded-lg border-2 border-zinc-900 bg-white px-5 text-2xl font-black text-zinc-950"
+                type="button"
+                disabled={deleting}
+                onClick={() => setShowDeleteConfirm(false)}
+              >
+                انصراف
+              </button>
+              <button
+                className="min-h-16 rounded-lg bg-red-700 px-5 text-2xl font-black text-white disabled:bg-zinc-500"
+                type="button"
+                disabled={deleting}
+                onClick={confirmDelete}
+              >
+                {deleting ? "در حال حذف..." : "بله، حذف شود"}
               </button>
             </div>
           </section>
