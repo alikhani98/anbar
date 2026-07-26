@@ -17,6 +17,7 @@ import {
 } from "./db";
 
 type Route = "/" | "/search" | "/new-batch" | "/settings";
+type StatusFilter = "available" | "withReserved" | "withArchive";
 
 type FormErrors = Partial<
   Record<
@@ -110,6 +111,11 @@ const anyFilterLabel = "فرقی ندارد";
 const lowStockThresholdKg = 50;
 const grades = ["اعلا", "معمولی", unknownLabel];
 const gradeFilters = [anyFilterLabel, ...grades];
+const statusFilterOptions: { label: string; value: StatusFilter }[] = [
+  { label: "فقط موجود", value: "available" },
+  { label: "همراه رزرو", value: "withReserved" },
+  { label: "شامل آرشیو", value: "withArchive" },
+];
 
 const initialFormState: FormState = {
   pistachioType: "",
@@ -232,6 +238,10 @@ function formatOptionalPercent(value: number | null | undefined) {
 
 function isLowStock(batch: Batch) {
   return batch.remainingWeightKg < lowStockThresholdKg;
+}
+
+function isArchived(batch: Batch) {
+  return batch.status === "تمام شده";
 }
 
 function formatFileSize(bytes: number) {
@@ -970,7 +980,7 @@ function SearchInventory() {
   const [consignmentFilter, setConsignmentFilter] = useState(anyFilterLabel);
   const [showMoreFilters, setShowMoreFilters] = useState(false);
   const [pistachioTypeOptions, setPistachioTypeOptions] = useState<string[]>([]);
-  const [showReserved, setShowReserved] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("available");
   const [batches, setBatches] = useState<BatchWithPhotos[]>([]);
   const [orderBasket, setOrderBasket] = useState<BatchWithPhotos[]>([]);
   const [basketOpen, setBasketOpen] = useState(true);
@@ -983,7 +993,12 @@ function SearchInventory() {
   const photoUrlsRef = useRef<string[]>([]);
 
   async function loadBatches() {
-    const statusList = showReserved ? ["موجود", "رزرو شده"] : ["موجود"];
+    const statusList =
+      statusFilter === "withArchive"
+        ? ["موجود", "رزرو شده", "تمام شده"]
+        : statusFilter === "withReserved"
+          ? ["موجود", "رزرو شده"]
+          : ["موجود"];
     const availableBatches = await db.batches
       .where("status")
       .anyOf(statusList)
@@ -1066,7 +1081,7 @@ function SearchInventory() {
       photoUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
       photoUrlsRef.current = [];
     };
-  }, [showReserved]);
+  }, [statusFilter]);
 
   useEffect(() => {
     let active = true;
@@ -1281,17 +1296,9 @@ function SearchInventory() {
             ) : null}
           </section>
 
-          <button
-            className={`min-h-12 justify-self-start rounded-lg border-2 px-4 text-base font-black ${
-              showReserved
-                ? "border-emerald-800 bg-emerald-800 text-white"
-                : "border-zinc-300 bg-white text-zinc-800"
-            }`}
-            type="button"
-            onClick={() => setShowReserved((current) => !current)}
-          >
-            نمایش رزرو شده‌ها
-          </button>
+          <Field label="وضعیت">
+            <StatusFilterGroup value={statusFilter} onChange={setStatusFilter} />
+          </Field>
         </section>
 
         {confirmation ? (
@@ -1310,7 +1317,11 @@ function SearchInventory() {
           <section className="grid gap-4">
             {filteredBatches.map((batch) => (
               <div
-                className="relative grid min-h-36 grid-cols-[7rem_1fr] gap-4 rounded-lg border-2 border-zinc-200 bg-white p-3 text-right shadow-sm active:scale-[0.99] sm:grid-cols-[9rem_1fr]"
+                className={`relative grid min-h-36 grid-cols-[7rem_1fr] gap-4 rounded-lg border-2 p-3 text-right shadow-sm active:scale-[0.99] sm:grid-cols-[9rem_1fr] ${
+                  isArchived(batch)
+                    ? "border-zinc-300 bg-zinc-100 opacity-85"
+                    : "border-zinc-200 bg-white"
+                }`}
                 key={batch.id}
                 role="button"
                 tabIndex={0}
@@ -1418,6 +1429,12 @@ function BatchThumbnail({ batch }: { batch: BatchWithPhotos }) {
 
 function BatchBadges({ batch, className = "" }: { batch: Batch; className?: string }) {
   const badges = [
+    isArchived(batch)
+      ? {
+          label: "آرشیو",
+          className: "bg-zinc-200 text-zinc-800 ring-1 ring-zinc-500",
+        }
+      : null,
     batch.isConsignment
       ? {
           label: "امانت",
@@ -1688,26 +1705,32 @@ function BatchDetail({
           ) : null}
         </section>
 
-        <section className="grid gap-4 rounded-lg bg-white p-4 shadow-sm">
-          <h2 className="text-3xl font-black">رزرو / کسر از موجودی</h2>
-          <NumberField
-            label="مقدار (کیلو)"
-            value={deductAmount}
-            error={deductError}
-            min={0}
-            max={batch.remainingWeightKg}
-            onChange={onDeductAmountChange}
-            onMinus={onDeductMinus}
-            onPlus={onDeductPlus}
-          />
-          <button
-            className="min-h-16 rounded-lg bg-emerald-800 px-6 text-2xl font-black text-white"
-            type="button"
-            onClick={onConfirm}
-          >
-            تایید کسر از موجودی
-          </button>
-        </section>
+        {isArchived(batch) ? (
+          <section className="rounded-lg border-2 border-zinc-300 bg-zinc-100 p-4 text-xl font-black text-zinc-700">
+            این بار در آرشیو است؛ کسر موجودی برای آن نمایش داده نمی‌شود.
+          </section>
+        ) : (
+          <section className="grid gap-4 rounded-lg bg-white p-4 shadow-sm">
+            <h2 className="text-3xl font-black">رزرو / کسر از موجودی</h2>
+            <NumberField
+              label="مقدار (کیلو)"
+              value={deductAmount}
+              error={deductError}
+              min={0}
+              max={batch.remainingWeightKg}
+              onChange={onDeductAmountChange}
+              onMinus={onDeductMinus}
+              onPlus={onDeductPlus}
+            />
+            <button
+              className="min-h-16 rounded-lg bg-emerald-800 px-6 text-2xl font-black text-white"
+              type="button"
+              onClick={onConfirm}
+            >
+              تایید کسر از موجودی
+            </button>
+          </section>
+        )}
       </section>
 
       {lightboxIndex !== null && batch.photoUrls[lightboxIndex] ? (
@@ -2499,6 +2522,37 @@ function ChipGroup({
             onClick={() => onChange(option)}
           >
             {option}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function StatusFilterGroup({
+  value,
+  onChange,
+}: {
+  value: StatusFilter;
+  onChange: (value: StatusFilter) => void;
+}) {
+  return (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      {statusFilterOptions.map((option) => {
+        const selected = value === option.value;
+
+        return (
+          <button
+            className={`min-h-14 rounded-lg border-2 px-4 text-xl font-black ${
+              selected
+                ? "border-emerald-800 bg-emerald-800 text-white"
+                : "border-zinc-300 bg-white text-zinc-950"
+            }`}
+            key={option.value}
+            type="button"
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
           </button>
         );
       })}
