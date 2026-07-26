@@ -42,6 +42,10 @@ type StatsScreenState = {
   monthlyEntries: { month: string; weightKg: number }[];
   lowStockBatches: Batch[];
 };
+type BackupMetaRecord = {
+  iso: string;
+  jalaliText: string;
+};
 
 type FormErrors = Partial<
   Record<
@@ -148,6 +152,9 @@ const chartColors = {
   grid: "#d4d4d8",
   red: "#dc2626",
 };
+const lastBackupStorageKey = "anbar:last-backup-meta";
+const backupReminderDismissKey = "anbar:backup-reminder-dismissed";
+const backupReminderThresholdDays = 14;
 const statusFilterOptions: { label: string; value: StatusFilter }[] = [
   { label: "فقط موجود", value: "available" },
   { label: "همراه رزرو", value: "withReserved" },
@@ -222,6 +229,11 @@ function navigateTo(route: Route) {
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
+function navigateToBackupSettings() {
+  window.history.pushState({}, "", "/settings#backup-actions");
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
 function getTodayJalali() {
   const parts = new Intl.DateTimeFormat("fa-IR-u-ca-persian-nu-latn", {
     year: "numeric",
@@ -234,6 +246,67 @@ function getTodayJalali() {
   const day = parts.find((part) => part.type === "day")?.value ?? "";
 
   return `${year}/${month}/${day}`;
+}
+
+function getNowJalaliDateTime() {
+  const parts = new Intl.DateTimeFormat("fa-IR-u-ca-persian-nu-latn", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date());
+
+  const year = parts.find((part) => part.type === "year")?.value ?? "";
+  const month = parts.find((part) => part.type === "month")?.value ?? "";
+  const day = parts.find((part) => part.type === "day")?.value ?? "";
+  const hour = parts.find((part) => part.type === "hour")?.value ?? "";
+  const minute = parts.find((part) => part.type === "minute")?.value ?? "";
+
+  return `${year}/${month}/${day} - ${hour}:${minute}`;
+}
+
+function loadLastBackupMeta() {
+  const rawValue = window.localStorage.getItem(lastBackupStorageKey);
+
+  if (!rawValue) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue) as Partial<BackupMetaRecord>;
+
+    if (typeof parsed.iso !== "string" || typeof parsed.jalaliText !== "string") {
+      return null;
+    }
+
+    return {
+      iso: parsed.iso,
+      jalaliText: parsed.jalaliText,
+    } satisfies BackupMetaRecord;
+  } catch {
+    return null;
+  }
+}
+
+function saveLastBackupMeta(meta: BackupMetaRecord) {
+  window.localStorage.setItem(lastBackupStorageKey, JSON.stringify(meta));
+}
+
+function shouldShowBackupReminder(lastBackupMeta: BackupMetaRecord | null) {
+  if (!lastBackupMeta) {
+    return true;
+  }
+
+  const lastBackupMs = Date.parse(lastBackupMeta.iso);
+
+  if (Number.isNaN(lastBackupMs)) {
+    return true;
+  }
+
+  const elapsedDays = (Date.now() - lastBackupMs) / (1000 * 60 * 60 * 24);
+  return elapsedDays >= backupReminderThresholdDays;
 }
 
 function normalizeNumber(value: string) {
@@ -574,6 +647,10 @@ export function App() {
 function Home() {
   const [availableBatchCount, setAvailableBatchCount] = useState(0);
   const [availableWeightKg, setAvailableWeightKg] = useState(0);
+  const [lastBackupMeta, setLastBackupMeta] = useState<BackupMetaRecord | null>(null);
+  const [backupReminderDismissed, setBackupReminderDismissed] = useState(false);
+  const backupReminderVisible =
+    shouldShowBackupReminder(lastBackupMeta) && !backupReminderDismissed;
 
   useEffect(() => {
     let active = true;
@@ -598,6 +675,11 @@ function Home() {
       .catch((error) => {
         console.error("Failed to load home stats", error);
       });
+
+    setLastBackupMeta(loadLastBackupMeta());
+    setBackupReminderDismissed(
+      window.sessionStorage.getItem(backupReminderDismissKey) === "1",
+    );
 
     return () => {
       active = false;
@@ -626,6 +708,42 @@ function Home() {
             {formatKg(availableWeightKg)} کیلو
           </p>
         </div>
+
+        {backupReminderVisible ? (
+          <div className="grid gap-3 rounded-lg border-2 border-amber-300 bg-amber-50 px-4 py-4 text-right text-lg font-bold text-amber-950 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <p className="leading-8">
+                {lastBackupMeta
+                  ? "بیش از ۲ هفته از آخرین نسخه پشتیبان گذشته است، پیشنهاد می‌شود یک نسخه جدید تهیه کنید."
+                  : "هنوز نسخه پشتیبانی تهیه نشده است، پیشنهاد می‌شود یک نسخه جدید تهیه کنید."}
+              </p>
+              <button
+                className="min-h-10 rounded-lg px-3 text-base font-black text-amber-900 underline decoration-2 underline-offset-4"
+                type="button"
+                onClick={() => {
+                  window.sessionStorage.setItem(backupReminderDismissKey, "1");
+                  setBackupReminderDismissed(true);
+                }}
+              >
+                بستن
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <button
+                className="min-h-12 rounded-lg bg-amber-500 px-4 text-lg font-black text-white"
+                type="button"
+                onClick={navigateToBackupSettings}
+              >
+                تهیه نسخه پشتیبان
+              </button>
+              {lastBackupMeta ? (
+                <span className="self-center text-base font-semibold text-amber-900">
+                  آخرین نسخه پشتیبان: {lastBackupMeta.jalaliText}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
         <div className="grid gap-5">
           <button
@@ -945,6 +1063,7 @@ function SettingsScreen() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [restoring, setRestoring] = useState(false);
+  const [lastBackupMeta, setLastBackupMeta] = useState<BackupMetaRecord | null>(null);
   const [pistachioTypeOptions, setPistachioTypeOptions] = useState<PistachioTypeOption[]>([]);
   const [appearanceTypeOptions, setAppearanceTypeOptions] = useState<AppearanceTypeOption[]>([]);
   const [newPistachioType, setNewPistachioType] = useState("");
@@ -954,6 +1073,8 @@ function SettingsScreen() {
   const [editingAppearanceId, setEditingAppearanceId] = useState<number | null>(null);
   const [editingAppearanceName, setEditingAppearanceName] = useState("");
   const restoreInputRef = useRef<HTMLInputElement>(null);
+  const backupActionsRef = useRef<HTMLDivElement>(null);
+  const backupReminderVisible = shouldShowBackupReminder(lastBackupMeta);
 
   async function refreshPistachioTypes() {
     setPistachioTypeOptions(await loadPistachioTypeOptions());
@@ -968,6 +1089,16 @@ function SettingsScreen() {
       console.error("Failed to load settings lists", loadError);
       setError("خواندن فهرست‌های تنظیمات انجام نشد.");
     });
+
+    setLastBackupMeta(loadLastBackupMeta());
+  }, []);
+
+  useEffect(() => {
+    if (window.location.hash !== "#backup-actions") {
+      return;
+    }
+
+    backupActionsRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, []);
 
   function clearSettingsMessages() {
@@ -1031,6 +1162,13 @@ function SettingsScreen() {
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
+      const nextBackupMeta = {
+        iso: new Date().toISOString(),
+        jalaliText: getNowJalaliDateTime(),
+      } satisfies BackupMetaRecord;
+      saveLastBackupMeta(nextBackupMeta);
+      setLastBackupMeta(nextBackupMeta);
+      window.sessionStorage.removeItem(backupReminderDismissKey);
       setMessage(`نسخه پشتیبان آماده شد. تعداد بارها: ${formatKg(batches.length)}`);
     } catch (backupError) {
       console.error("Failed to export backup", backupError);
@@ -1491,13 +1629,45 @@ function SettingsScreen() {
           </div>
         ) : null}
 
-        <button
-          className="min-h-16 rounded-lg bg-emerald-800 px-6 text-2xl font-black text-white"
-          type="button"
-          onClick={exportBackup}
+        <section
+          className="grid gap-4 rounded-lg bg-white p-4 shadow-sm"
+          id="backup-actions"
+          ref={backupActionsRef}
         >
-          دریافت نسخه پشتیبان
-        </button>
+          <div className="grid gap-2">
+            <h2 className="text-3xl font-black">نسخه پشتیبان</h2>
+            <p className="text-xl font-semibold text-zinc-700">
+              {lastBackupMeta
+                ? `آخرین نسخه پشتیبان: ${lastBackupMeta.jalaliText}`
+                : "هنوز نسخه پشتیبانی تهیه نشده"}
+            </p>
+          </div>
+
+          {backupReminderVisible ? (
+            <div className="grid gap-3 rounded-lg border-2 border-amber-300 bg-amber-50 px-4 py-4 text-xl font-bold text-amber-950">
+              <p>
+                {lastBackupMeta
+                  ? "بیش از ۲ هفته از آخرین نسخه پشتیبان گذشته است، پیشنهاد می‌شود یک نسخه جدید تهیه کنید."
+                  : "هنوز نسخه پشتیبانی تهیه نشده است، پیشنهاد می‌شود یک نسخه جدید تهیه کنید."}
+              </p>
+              <button
+                className="min-h-12 justify-self-start rounded-lg bg-amber-500 px-4 text-lg font-black text-white"
+                type="button"
+                onClick={exportBackup}
+              >
+                تهیه نسخه پشتیبان
+              </button>
+            </div>
+          ) : null}
+
+          <button
+            className="min-h-16 rounded-lg bg-emerald-800 px-6 text-2xl font-black text-white"
+            type="button"
+            onClick={exportBackup}
+          >
+            دریافت نسخه پشتیبان
+          </button>
+        </section>
 
         <input
           ref={restoreInputRef}
@@ -2219,11 +2389,27 @@ function SearchInventory() {
                       {formatKg(batch.remainingWeightKg)} کیلو
                     </p>
                     <dl className="grid gap-x-3 gap-y-0 text-lg font-semibold leading-7 text-zinc-700 sm:grid-cols-2">
-                      <div>تعداد گونی: {formatKg(batch.sackCount)}</div>
-                      <div>شکل ظاهری: {batch.appearanceType ?? unknownLabel}</div>
-                      <div>مالک: {batch.owner}</div>
-                      <div>مکان: {batch.location || "ثبت نشده"}</div>
-                      <div>تاریخ ورود: {batch.entryDateJalali}</div>
+                      <InlineField
+                        icon={<SackIcon />}
+                        label="تعداد گونی"
+                        value={formatKg(batch.sackCount)}
+                      />
+                      <InlineField
+                        icon={<AppearanceIcon />}
+                        label="شکل ظاهری"
+                        value={batch.appearanceType ?? unknownLabel}
+                      />
+                      <InlineField icon={<OwnerIcon />} label="مالک" value={batch.owner} />
+                      <InlineField
+                        icon={<LocationFieldIcon />}
+                        label="مکان"
+                        value={batch.location || "ثبت نشده"}
+                      />
+                      <InlineField
+                        icon={<CalendarFieldIcon />}
+                        label="تاریخ ورود"
+                        value={batch.entryDateJalali}
+                      />
                     </dl>
                   </div>
                   <button
@@ -2311,6 +2497,112 @@ function PlaceholderPhoto({ className }: { className: string }) {
       src={pistachioPlaceholderUrl}
       alt="عکس ثبت نشده"
     />
+  );
+}
+
+function InlineIcon({
+  children,
+  className = "",
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`inline-flex h-4 w-4 shrink-0 items-center justify-center text-zinc-400 ${className}`}
+    >
+      <svg
+        className="h-4 w-4"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {children}
+      </svg>
+    </span>
+  );
+}
+
+function SackIcon() {
+  return (
+    <InlineIcon>
+      <path d="M9 4h6" />
+      <path d="M10 4c0 1.4.9 2.4 2 3 1.1-.6 2-1.6 2-3" />
+      <path d="M7.5 11.5c0-3 2.2-5.5 4.5-5.5s4.5 2.5 4.5 5.5c0 1.4-.5 2.5-1.2 3.6l-.6 1c-.5.8-.7 1.6-.7 2.4 0 1.4-1 2.5-2 2.5s-2-1.1-2-2.5c0-.8-.2-1.6-.7-2.4l-.6-1c-.7-1.1-1.2-2.2-1.2-3.6Z" />
+    </InlineIcon>
+  );
+}
+
+function OwnerIcon() {
+  return (
+    <InlineIcon>
+      <path d="M12 12a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
+      <path d="M5 19.5c1.5-2.6 4-4 7-4s5.5 1.4 7 4" />
+    </InlineIcon>
+  );
+}
+
+function CalendarFieldIcon() {
+  return (
+    <InlineIcon>
+      <rect x="4" y="5" width="16" height="15" rx="2" />
+      <path d="M8 3v4" />
+      <path d="M16 3v4" />
+      <path d="M4 10h16" />
+    </InlineIcon>
+  );
+}
+
+function LocationFieldIcon() {
+  return (
+    <InlineIcon>
+      <path d="M12 20s5-4.7 5-9a5 5 0 1 0-10 0c0 4.3 5 9 5 9Z" />
+      <circle cx="12" cy="11" r="1.8" />
+    </InlineIcon>
+  );
+}
+
+function AppearanceIcon() {
+  return (
+    <InlineIcon>
+      <path d="m11 4 7 7-7 7-7-7 7-7Z" />
+      <path d="M11 8h.01" />
+    </InlineIcon>
+  );
+}
+
+function FieldLabelWithIcon({
+  icon,
+  label,
+}: {
+  icon: ReactNode;
+  label: string;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {icon}
+      <span>{label}:</span>
+    </span>
+  );
+}
+
+function InlineField({
+  icon,
+  label,
+  value,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: ReactNode;
+}) {
+  return (
+    <div>
+      <FieldLabelWithIcon icon={icon} label={label} /> {value}
+    </div>
   );
 }
 
@@ -2552,7 +2844,11 @@ function BatchDetail({
 
         <section className="grid gap-3 rounded-lg bg-white p-4 text-xl font-semibold shadow-sm sm:grid-cols-2">
           <DetailRow label="نوع پسته" value={batch.pistachioType} />
-          <DetailRow label="شکل ظاهری" value={batch.appearanceType ?? unknownLabel} />
+          <DetailRow
+            label="شکل ظاهری"
+            value={batch.appearanceType ?? unknownLabel}
+            icon={<AppearanceIcon />}
+          />
           <DetailRow label="انس" value={formatOptionalNumber(batch.ounceGrade)} />
           <DetailRow label="درصد مغز" value={formatOptionalPercent(batch.kernelPercent)} />
           <DetailRow label="وزن کل" value={`${formatKg(batch.totalWeightKg)} کیلو`} />
@@ -2560,11 +2856,20 @@ function BatchDetail({
             label="باقیمانده"
             value={`${formatKg(batch.remainingWeightKg)} کیلو`}
           />
-          <DetailRow label="تعداد گونی" value={formatKg(batch.sackCount)} />
-          <DetailRow label="مالک" value={batch.owner} />
+          <DetailRow label="تعداد گونی" value={formatKg(batch.sackCount)} icon={<SackIcon />} />
+          <DetailRow label="مالک" value={batch.owner} icon={<OwnerIcon />} />
           <DetailRow label="امانت" value={batch.isConsignment ? "بله" : "خیر"} />
-          <DetailRow label="تاریخ ورود" value={batch.entryDateJalali} />
-          <DetailRow label="مکان" value={batch.location || "ثبت نشده"} wide />
+          <DetailRow
+            label="تاریخ ورود"
+            value={batch.entryDateJalali}
+            icon={<CalendarFieldIcon />}
+          />
+          <DetailRow
+            label="مکان"
+            value={batch.location || "ثبت نشده"}
+            wide
+            icon={<LocationFieldIcon />}
+          />
           <DetailRow label="توضیحات" value={batch.notes || "ندارد"} wide />
           <DetailRow label="وضعیت" value={batch.status} />
         </section>
@@ -2759,14 +3064,18 @@ function DetailRow({
   label,
   value,
   wide,
+  icon,
 }: {
   label: string;
   value: string;
   wide?: boolean;
+  icon?: ReactNode;
 }) {
   return (
     <div className={wide ? "sm:col-span-2" : undefined}>
-      <div className="text-base font-black text-zinc-500">{label}</div>
+      <div className="text-base font-black text-zinc-500">
+        {icon ? <FieldLabelWithIcon icon={icon} label={label} /> : label}
+      </div>
       <div className="mt-1 break-words text-2xl font-black text-zinc-950">{value}</div>
     </div>
   );
