@@ -9,7 +9,9 @@ import {
 } from "react";
 import {
   db,
+  defaultAppearanceTypeNames,
   defaultPistachioTypeNames,
+  type AppearanceTypeOption,
   type Batch,
   type Deduction,
   type Photo,
@@ -22,7 +24,6 @@ type StatusFilter = "available" | "withReserved" | "withArchive";
 type FormErrors = Partial<
   Record<
     | "pistachioType"
-    | "grade"
     | "ounceGrade"
     | "kernelPercent"
     | "totalWeightKg"
@@ -80,6 +81,10 @@ type BackupPistachioType = PistachioTypeOption & {
   id?: number;
 };
 
+type BackupAppearanceType = AppearanceTypeOption & {
+  id?: number;
+};
+
 type BackupFile = {
   app: "pistachio-warehouse-tracker";
   version: 1;
@@ -88,12 +93,13 @@ type BackupFile = {
   photos: BackupPhoto[];
   deductions?: BackupDeduction[];
   pistachioTypes?: BackupPistachioType[];
+  appearanceTypes?: BackupAppearanceType[];
 };
 
 type FormState = {
   pistachioType: string;
   customPistachioType: string;
-  grade: string;
+  appearanceType: string;
   ounceGrade: string;
   kernelPercent: string;
   totalWeightKg: string;
@@ -109,8 +115,6 @@ const otherPistachioTypeLabel = "سایر";
 const unknownLabel = "نامشخص";
 const anyFilterLabel = "فرقی ندارد";
 const lowStockThresholdKg = 50;
-const grades = ["اعلا", "معمولی", unknownLabel];
-const gradeFilters = [anyFilterLabel, ...grades];
 const statusFilterOptions: { label: string; value: StatusFilter }[] = [
   { label: "فقط موجود", value: "available" },
   { label: "همراه رزرو", value: "withReserved" },
@@ -120,7 +124,7 @@ const statusFilterOptions: { label: string; value: StatusFilter }[] = [
 const initialFormState: FormState = {
   pistachioType: "",
   customPistachioType: "",
-  grade: unknownLabel,
+  appearanceType: unknownLabel,
   ounceGrade: "",
   kernelPercent: "",
   totalWeightKg: "",
@@ -138,7 +142,7 @@ function getFormStateFromBatch(batch: Batch, typeNames = defaultPistachioTypeNam
   return {
     pistachioType: usesListedType ? batch.pistachioType : otherPistachioTypeLabel,
     customPistachioType: usesListedType ? "" : batch.pistachioType,
-    grade: batch.grade || unknownLabel,
+    appearanceType: batch.appearanceType ?? unknownLabel,
     ounceGrade: batch.ounceGrade == null ? "" : String(batch.ounceGrade),
     kernelPercent: batch.kernelPercent == null ? "" : String(batch.kernelPercent),
     totalWeightKg: String(batch.totalWeightKg),
@@ -291,9 +295,22 @@ async function ensureDefaultPistachioTypes() {
   }
 }
 
+async function ensureDefaultAppearanceTypes() {
+  const count = await db.appearanceTypes.count();
+
+  if (count === 0) {
+    await db.appearanceTypes.bulkAdd(defaultAppearanceTypeNames.map((name) => ({ name })));
+  }
+}
+
 async function loadPistachioTypeOptions() {
   await ensureDefaultPistachioTypes();
   return db.pistachioTypes.orderBy("name").toArray();
+}
+
+async function loadAppearanceTypeOptions() {
+  await ensureDefaultAppearanceTypes();
+  return db.appearanceTypes.orderBy("name").toArray();
 }
 
 function normalizeBackupPistachioType(record: unknown): BackupPistachioType {
@@ -308,6 +325,27 @@ function normalizeBackupPistachioType(record: unknown): BackupPistachioType {
 
   if (!normalized.name) {
     throw new Error("Invalid pistachio type name.");
+  }
+
+  if (typeof typeOption.id === "number") {
+    normalized.id = typeOption.id;
+  }
+
+  return normalized;
+}
+
+function normalizeBackupAppearanceType(record: unknown): BackupAppearanceType {
+  if (!record || typeof record !== "object") {
+    throw new Error("Invalid appearance type.");
+  }
+
+  const typeOption = record as Partial<BackupAppearanceType>;
+  const normalized: BackupAppearanceType = {
+    name: String(typeOption.name ?? "").trim(),
+  };
+
+  if (!normalized.name) {
+    throw new Error("Invalid appearance type name.");
   }
 
   if (typeof typeOption.id === "number") {
@@ -392,7 +430,7 @@ function normalizeBackupBatch(record: unknown): BackupBatch {
   const batch = record as Partial<BackupBatch>;
   const normalized: BackupBatch = {
     pistachioType: String(batch.pistachioType ?? ""),
-    grade: String(batch.grade ?? unknownLabel),
+    appearanceType: batch.appearanceType ? String(batch.appearanceType) : null,
     ounceGrade:
       batch.ounceGrade === null || batch.ounceGrade === undefined
         ? null
@@ -551,19 +589,27 @@ function SettingsScreen() {
   const [error, setError] = useState("");
   const [restoring, setRestoring] = useState(false);
   const [pistachioTypeOptions, setPistachioTypeOptions] = useState<PistachioTypeOption[]>([]);
+  const [appearanceTypeOptions, setAppearanceTypeOptions] = useState<AppearanceTypeOption[]>([]);
   const [newPistachioType, setNewPistachioType] = useState("");
+  const [newAppearanceType, setNewAppearanceType] = useState("");
   const [editingTypeId, setEditingTypeId] = useState<number | null>(null);
   const [editingTypeName, setEditingTypeName] = useState("");
+  const [editingAppearanceId, setEditingAppearanceId] = useState<number | null>(null);
+  const [editingAppearanceName, setEditingAppearanceName] = useState("");
   const restoreInputRef = useRef<HTMLInputElement>(null);
 
   async function refreshPistachioTypes() {
     setPistachioTypeOptions(await loadPistachioTypeOptions());
   }
 
+  async function refreshAppearanceTypes() {
+    setAppearanceTypeOptions(await loadAppearanceTypeOptions());
+  }
+
   useEffect(() => {
-    refreshPistachioTypes().catch((loadError) => {
-      console.error("Failed to load pistachio types", loadError);
-      setError("خواندن نوع‌های پسته انجام نشد.");
+    Promise.all([refreshPistachioTypes(), refreshAppearanceTypes()]).catch((loadError) => {
+      console.error("Failed to load settings lists", loadError);
+      setError("خواندن فهرست‌های تنظیمات انجام نشد.");
     });
   }, []);
 
@@ -581,6 +627,7 @@ function SettingsScreen() {
       const photos = await db.photos.toArray();
       const deductions = await db.deductions.toArray();
       const pistachioTypesForBackup = await loadPistachioTypeOptions();
+      const appearanceTypesForBackup = await loadAppearanceTypeOptions();
       const backup: BackupFile = {
         app: "pistachio-warehouse-tracker",
         version: 1,
@@ -598,6 +645,7 @@ function SettingsScreen() {
         ),
         deductions: deductions.map(normalizeBackupDeduction),
         pistachioTypes: pistachioTypesForBackup.map(normalizeBackupPistachioType),
+        appearanceTypes: appearanceTypesForBackup.map(normalizeBackupAppearanceType),
       };
       const json = JSON.stringify(backup, null, 2);
       const url = URL.createObjectURL(
@@ -658,6 +706,9 @@ function SettingsScreen() {
       const pistachioTypesForRestore = Array.isArray(parsed.pistachioTypes)
         ? parsed.pistachioTypes.map(normalizeBackupPistachioType)
         : defaultPistachioTypeNames.map((name) => ({ name }));
+      const appearanceTypesForRestore = Array.isArray(parsed.appearanceTypes)
+        ? parsed.appearanceTypes.map(normalizeBackupAppearanceType)
+        : defaultAppearanceTypeNames.map((name) => ({ name }));
       const photos = await Promise.all(parsed.photos.map(async (photo) => {
         if (
           !photo ||
@@ -689,7 +740,8 @@ function SettingsScreen() {
         return restoredPhoto;
       }));
 
-      await db.transaction("rw", db.batches, db.photos, db.deductions, db.pistachioTypes, async () => {
+      await db.transaction("rw", db.batches, db.photos, db.deductions, db.pistachioTypes, db.appearanceTypes, async () => {
+        await db.appearanceTypes.clear();
         await db.pistachioTypes.clear();
         await db.deductions.clear();
         await db.photos.clear();
@@ -710,9 +762,14 @@ function SettingsScreen() {
         if (pistachioTypesForRestore.length > 0) {
           await db.pistachioTypes.bulkPut(pistachioTypesForRestore);
         }
+
+        if (appearanceTypesForRestore.length > 0) {
+          await db.appearanceTypes.bulkPut(appearanceTypesForRestore);
+        }
       });
 
       await refreshPistachioTypes();
+      await refreshAppearanceTypes();
       setMessage(`بازیابی انجام شد. تعداد بارهای بازیابی‌شده: ${formatKg(batches.length)}`);
     } catch (restoreError) {
       console.error("Failed to restore backup", restoreError);
@@ -826,6 +883,109 @@ function SettingsScreen() {
     } catch (deleteError) {
       console.error("Failed to delete pistachio type", deleteError);
       setError("حذف نوع پسته انجام نشد.");
+    }
+  }
+
+  async function addAppearanceType() {
+    const name = newAppearanceType.trim();
+    clearSettingsMessages();
+
+    if (!name) {
+      setError("نام شکل ظاهری را وارد کنید.");
+      return;
+    }
+
+    if (appearanceTypeOptions.some((typeOption) => typeOption.name === name)) {
+      setError("این شکل ظاهری قبلا ثبت شده است.");
+      return;
+    }
+
+    try {
+      await db.appearanceTypes.add({ name });
+      setNewAppearanceType("");
+      await refreshAppearanceTypes();
+      setMessage("شکل ظاهری اضافه شد.");
+    } catch (addError) {
+      console.error("Failed to add appearance type", addError);
+      setError("اضافه کردن شکل ظاهری انجام نشد.");
+    }
+  }
+
+  function startEditingAppearanceType(typeOption: AppearanceTypeOption) {
+    setEditingAppearanceId(typeOption.id ?? null);
+    setEditingAppearanceName(typeOption.name);
+    clearSettingsMessages();
+  }
+
+  async function saveAppearanceTypeName(typeOption: AppearanceTypeOption) {
+    if (typeOption.id === undefined) {
+      return;
+    }
+
+    const newName = editingAppearanceName.trim();
+    const oldName = typeOption.name;
+    clearSettingsMessages();
+
+    if (!newName) {
+      setError("نام شکل ظاهری نمی‌تواند خالی باشد.");
+      return;
+    }
+
+    if (
+      newName !== oldName &&
+      appearanceTypeOptions.some((option) => option.name === newName)
+    ) {
+      setError("این نام قبلا در فهرست شکل ظاهری وجود دارد.");
+      return;
+    }
+
+    try {
+      await db.transaction("rw", db.appearanceTypes, db.batches, async () => {
+        await db.appearanceTypes.update(typeOption.id!, { name: newName });
+        await db.batches
+          .where("appearanceType")
+          .equals(oldName)
+          .modify((batch) => {
+            batch.appearanceType = newName;
+          });
+      });
+
+      setEditingAppearanceId(null);
+      setEditingAppearanceName("");
+      await refreshAppearanceTypes();
+      setMessage("نام شکل ظاهری و بارهای قبلی مرتبط به‌روزرسانی شد.");
+    } catch (renameError) {
+      console.error("Failed to rename appearance type", renameError);
+      setError("ویرایش نام شکل ظاهری انجام نشد.");
+    }
+  }
+
+  async function deleteAppearanceType(typeOption: AppearanceTypeOption) {
+    if (typeOption.id === undefined) {
+      return;
+    }
+
+    clearSettingsMessages();
+
+    try {
+      const usedCount = await db.batches
+        .where("appearanceType")
+        .equals(typeOption.name)
+        .count();
+
+      if (usedCount > 0) {
+        setError(
+          `این شکل ظاهری در ${formatKg(usedCount)} بار استفاده شده و حذف نمی‌شود.`,
+        );
+        return;
+      }
+
+      await db.appearanceTypes.delete(typeOption.id);
+      await refreshAppearanceTypes();
+      setMessage("شکل ظاهری حذف شد.");
+    } catch (deleteError) {
+      console.error("Failed to delete appearance type", deleteError);
+      setError("حذف شکل ظاهری انجام نشد.");
     }
   }
 
@@ -960,6 +1120,88 @@ function SettingsScreen() {
           </div>
         </section>
 
+        <section className="grid gap-4 rounded-lg bg-white p-4 shadow-sm">
+          <h2 className="text-3xl font-black">مدیریت شکل ظاهری</h2>
+
+          <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+            <input
+              className="min-h-16 rounded-lg border-2 border-zinc-300 bg-white px-4 text-2xl font-semibold outline-none focus:border-emerald-800"
+              type="text"
+              value={newAppearanceType}
+              onChange={(event) => setNewAppearanceType(event.target.value)}
+              placeholder="شکل ظاهری جدید"
+            />
+            <button
+              className="min-h-16 rounded-lg bg-emerald-800 px-6 text-2xl font-black text-white"
+              type="button"
+              onClick={addAppearanceType}
+            >
+              افزودن
+            </button>
+          </div>
+
+          <div className="grid gap-3">
+            {appearanceTypeOptions.map((typeOption) => (
+              <div
+                className="grid gap-3 rounded-lg border-2 border-zinc-200 p-3 sm:grid-cols-[1fr_auto_auto]"
+                key={typeOption.id ?? typeOption.name}
+              >
+                {editingAppearanceId === typeOption.id ? (
+                  <input
+                    className="min-h-14 rounded-lg border-2 border-zinc-300 bg-white px-4 text-2xl font-semibold outline-none focus:border-emerald-800"
+                    type="text"
+                    value={editingAppearanceName}
+                    onChange={(event) => setEditingAppearanceName(event.target.value)}
+                  />
+                ) : (
+                  <div className="flex min-h-14 items-center text-2xl font-black">
+                    {typeOption.name}
+                  </div>
+                )}
+
+                {editingAppearanceId === typeOption.id ? (
+                  <button
+                    className="min-h-14 rounded-lg bg-emerald-800 px-5 text-xl font-black text-white"
+                    type="button"
+                    onClick={() => saveAppearanceTypeName(typeOption)}
+                  >
+                    ذخیره
+                  </button>
+                ) : (
+                  <button
+                    className="min-h-14 rounded-lg border-2 border-zinc-900 bg-white px-5 text-xl font-black text-zinc-950"
+                    type="button"
+                    onClick={() => startEditingAppearanceType(typeOption)}
+                  >
+                    ویرایش
+                  </button>
+                )}
+
+                {editingAppearanceId === typeOption.id ? (
+                  <button
+                    className="min-h-14 rounded-lg border-2 border-zinc-300 bg-white px-5 text-xl font-black text-zinc-700"
+                    type="button"
+                    onClick={() => {
+                      setEditingAppearanceId(null);
+                      setEditingAppearanceName("");
+                    }}
+                  >
+                    لغو
+                  </button>
+                ) : (
+                  <button
+                    className="min-h-14 rounded-lg border-2 border-red-700 bg-white px-5 text-xl font-black text-red-800"
+                    type="button"
+                    onClick={() => deleteAppearanceType(typeOption)}
+                  >
+                    حذف
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+
         <button
           className="min-h-16 rounded-lg border-2 border-zinc-900 bg-white px-6 text-2xl font-black text-zinc-950"
           type="button"
@@ -974,12 +1216,13 @@ function SettingsScreen() {
 
 function SearchInventory() {
   const [pistachioType, setPistachioType] = useState("");
-  const [grade, setGrade] = useState(anyFilterLabel);
+  const [appearanceFilter, setAppearanceFilter] = useState(anyFilterLabel);
   const [ownerFilter, setOwnerFilter] = useState("");
   const [ownerSuggestions, setOwnerSuggestions] = useState<string[]>([]);
   const [consignmentFilter, setConsignmentFilter] = useState(anyFilterLabel);
   const [showMoreFilters, setShowMoreFilters] = useState(false);
   const [pistachioTypeOptions, setPistachioTypeOptions] = useState<string[]>([]);
+  const [appearanceTypeOptions, setAppearanceTypeOptions] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("available");
   const [batches, setBatches] = useState<BatchWithPhotos[]>([]);
   const [orderBasket, setOrderBasket] = useState<BatchWithPhotos[]>([]);
@@ -1086,10 +1329,15 @@ function SearchInventory() {
   useEffect(() => {
     let active = true;
 
-    Promise.all([loadPistachioTypeOptions(), db.batches.orderBy("owner").uniqueKeys()])
-      .then(([options, owners]) => {
+    Promise.all([
+      loadPistachioTypeOptions(),
+      loadAppearanceTypeOptions(),
+      db.batches.orderBy("owner").uniqueKeys(),
+    ])
+      .then(([pistachioOptions, appearanceOptions, owners]) => {
         if (active) {
-          setPistachioTypeOptions(options.map((option) => option.name));
+          setPistachioTypeOptions(pistachioOptions.map((option) => option.name));
+          setAppearanceTypeOptions(appearanceOptions.map((option) => option.name));
           setOwnerSuggestions(
             owners
               .map(String)
@@ -1116,15 +1364,26 @@ function SearchInventory() {
         (pistachioType === otherPistachioTypeLabel
           ? !pistachioTypeOptions.includes(batch.pistachioType)
           : batch.pistachioType === pistachioType);
-      const gradeMatches = grade === anyFilterLabel || batch.grade === grade;
+      const appearanceMatches =
+        appearanceFilter === anyFilterLabel ||
+        (appearanceFilter === unknownLabel
+          ? !batch.appearanceType
+          : batch.appearanceType === appearanceFilter);
       const ownerMatches = !ownerQuery || batch.owner.includes(ownerQuery);
       const consignmentMatches =
         consignmentFilter === anyFilterLabel ||
         (consignmentFilter === "امانت" ? batch.isConsignment : !batch.isConsignment);
 
-      return typeMatches && gradeMatches && ownerMatches && consignmentMatches;
+      return typeMatches && appearanceMatches && ownerMatches && consignmentMatches;
     });
-  }, [batches, consignmentFilter, grade, ownerFilter, pistachioType, pistachioTypeOptions]);
+  }, [
+    appearanceFilter,
+    batches,
+    consignmentFilter,
+    ownerFilter,
+    pistachioType,
+    pistachioTypeOptions,
+  ]);
 
   const filteredOwnerSuggestions = useMemo(() => {
     const query = ownerFilter.trim();
@@ -1246,8 +1505,12 @@ function SearchInventory() {
             />
           </Field>
 
-          <Field label="درجه">
-            <ChipGroup options={gradeFilters} value={grade} onChange={setGrade} />
+          <Field label="شکل ظاهری">
+            <ChipGroup
+              options={[anyFilterLabel, unknownLabel, ...appearanceTypeOptions]}
+              value={appearanceFilter}
+              onChange={setAppearanceFilter}
+            />
           </Field>
 
           <section className="grid gap-3">
@@ -1333,7 +1596,7 @@ function SearchInventory() {
                 <div className="grid content-center gap-2">
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                     <h2 className="text-2xl font-black">
-                      {batch.pistachioType} - {batch.grade}
+                      {batch.pistachioType}
                     </h2>
                     {batch.status === "رزرو شده" ? (
                       <span className="rounded-lg bg-amber-100 px-3 py-1 text-base font-black text-amber-900">
@@ -1346,6 +1609,7 @@ function SearchInventory() {
                   </p>
                   <dl className="grid gap-1 text-lg font-semibold text-zinc-700 sm:grid-cols-2">
                     <div>تعداد گونی: {formatKg(batch.sackCount)}</div>
+                    <div>شکل ظاهری: {batch.appearanceType ?? unknownLabel}</div>
                     <div>مالک: {batch.owner}</div>
                     <div>مکان: {batch.location || "ثبت نشده"}</div>
                     <div>تاریخ ورود: {batch.entryDateJalali}</div>
@@ -1512,8 +1776,10 @@ function OrderBasketPanel({
                 >
                   <div>
                     <span className="font-black text-zinc-950">
-                      {batch.pistachioType} - {batch.grade}
+                      {batch.pistachioType}
                     </span>
+                    <span className="mx-2">|</span>
+                    <span>شکل ظاهری: {batch.appearanceType ?? unknownLabel}</span>
                     <span className="mx-2">|</span>
                     <span>{formatKg(batch.remainingWeightKg)} کیلو</span>
                     <span className="mx-2">|</span>
@@ -1657,7 +1923,7 @@ function BatchDetail({
 
         <section className="grid gap-3 rounded-lg bg-white p-4 text-xl font-semibold shadow-sm sm:grid-cols-2">
           <DetailRow label="نوع پسته" value={batch.pistachioType} />
-          <DetailRow label="درجه" value={batch.grade} />
+          <DetailRow label="شکل ظاهری" value={batch.appearanceType ?? unknownLabel} />
           <DetailRow label="انس" value={formatOptionalNumber(batch.ounceGrade)} />
           <DetailRow label="درصد مغز" value={formatOptionalPercent(batch.kernelPercent)} />
           <DetailRow label="وزن کل" value={`${formatKg(batch.totalWeightKg)} کیلو`} />
@@ -1831,8 +2097,8 @@ function CustomerDisplayView({
             <div className="text-4xl font-black">{batch.pistachioType}</div>
           </div>
           <div>
-            <div className="text-lg font-black text-zinc-500">درجه</div>
-            <div className="text-4xl font-black">{batch.grade}</div>
+            <div className="text-lg font-black text-zinc-500">شکل ظاهری</div>
+            <div className="text-4xl font-black">{batch.appearanceType ?? unknownLabel}</div>
           </div>
           <div>
             <div className="text-lg font-black text-zinc-500">انس</div>
@@ -1889,6 +2155,9 @@ function NewBatchForm({
   const [pistachioTypeOptions, setPistachioTypeOptions] = useState<string[]>(
     defaultPistachioTypeNames,
   );
+  const [appearanceTypeOptions, setAppearanceTypeOptions] = useState<string[]>(
+    defaultAppearanceTypeNames,
+  );
   const [photos, setPhotos] = useState<PhotoDraft[]>(() =>
     editingBatch ? getPhotoDraftsFromBatch(editingBatch) : [],
   );
@@ -1905,6 +2174,16 @@ function NewBatchForm({
     form.pistachioType === otherPistachioTypeLabel
       ? form.customPistachioType.trim()
       : form.pistachioType;
+
+  const appearanceChipOptions = useMemo(() => {
+    const options = [unknownLabel, ...appearanceTypeOptions];
+
+    if (form.appearanceType && !options.includes(form.appearanceType)) {
+      return [...options, form.appearanceType];
+    }
+
+    return options;
+  }, [appearanceTypeOptions, form.appearanceType]);
 
   const filteredOwnerSuggestions = useMemo(() => {
     const query = form.owner.trim();
@@ -1923,7 +2202,7 @@ function NewBatchForm({
     return (
       form.pistachioType !== "" ||
       form.customPistachioType !== "" ||
-      form.grade !== initialFormState.grade ||
+      form.appearanceType !== initialFormState.appearanceType ||
       form.ounceGrade !== "" ||
       form.kernelPercent !== "" ||
       form.totalWeightKg !== "" ||
@@ -1941,9 +2220,10 @@ function NewBatchForm({
     let active = true;
 
     async function loadFormOptions() {
-      const [owners, typeOptions] = await Promise.all([
+      const [owners, typeOptions, appearanceOptions] = await Promise.all([
         db.batches.orderBy("owner").uniqueKeys(),
         loadPistachioTypeOptions(),
+        loadAppearanceTypeOptions(),
       ]);
 
       if (!active) {
@@ -1952,6 +2232,7 @@ function NewBatchForm({
 
       const typeNames = typeOptions.map((option) => option.name);
       setPistachioTypeOptions(typeNames);
+      setAppearanceTypeOptions(appearanceOptions.map((option) => option.name));
 
       if (editingBatch) {
         setForm(getFormStateFromBatch(editingBatch, typeNames));
@@ -2031,10 +2312,6 @@ function NewBatchForm({
       nextErrors.pistachioType = "نوع پسته را انتخاب کنید.";
     }
 
-    if (!form.grade) {
-      nextErrors.grade = "درجه را انتخاب کنید.";
-    }
-
     if (form.ounceGrade.trim() && (Number.isNaN(ounceGrade) || ounceGrade < 0)) {
       nextErrors.ounceGrade = "انس باید عدد صفر یا بیشتر باشد.";
     }
@@ -2086,7 +2363,7 @@ function NewBatchForm({
       const totalWeightKg = normalizeNumber(form.totalWeightKg);
       const batchFields: Batch = {
         pistachioType: selectedPistachioType,
-        grade: form.grade,
+        appearanceType: form.appearanceType === unknownLabel ? null : form.appearanceType,
         ounceGrade: normalizeOptionalNumber(form.ounceGrade, 0),
         kernelPercent: normalizeOptionalNumber(form.kernelPercent, 0, 100),
         totalWeightKg,
@@ -2104,7 +2381,7 @@ function NewBatchForm({
         if (isEditing && editingBatch) {
           await db.batches.update(editingBatch.id, {
             pistachioType: batchFields.pistachioType,
-            grade: batchFields.grade,
+            appearanceType: batchFields.appearanceType,
             ounceGrade: batchFields.ounceGrade,
             kernelPercent: batchFields.kernelPercent,
             totalWeightKg: batchFields.totalWeightKg,
@@ -2284,11 +2561,11 @@ function NewBatchForm({
           ) : null}
         </Field>
 
-        <Field label="درجه" error={errors.grade}>
+        <Field label="شکل ظاهری">
           <ChipGroup
-            options={grades}
-            value={form.grade}
-            onChange={(value) => updateField("grade", value)}
+            options={appearanceChipOptions}
+            value={form.appearanceType}
+            onChange={(value) => updateField("appearanceType", value)}
           />
         </Field>
 

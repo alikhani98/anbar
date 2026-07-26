@@ -5,7 +5,7 @@ export type BatchStatus = "موجود" | "رزرو شده" | "تمام شده";
 export interface Batch {
   id?: number;
   pistachioType: string;
-  grade: string;
+  appearanceType: string | null;
   ounceGrade: number | null;
   kernelPercent: number | null;
   totalWeightKg: number;
@@ -39,6 +39,11 @@ export interface PistachioTypeOption {
   name: string;
 }
 
+export interface AppearanceTypeOption {
+  id?: number;
+  name: string;
+}
+
 export const defaultPistachioTypeNames = [
   "احمدآقایی",
   "اکبری",
@@ -47,11 +52,20 @@ export const defaultPistachioTypeNames = [
   "فندقی",
 ];
 
+export const defaultAppearanceTypeNames = [
+  "دهن‌بست",
+  "خندان",
+  "نخودو",
+  "روآبی",
+  "زردو",
+];
+
 export const db = new Dexie("PistachioWarehouseTracker") as Dexie & {
   batches: EntityTable<Batch, "id">;
   photos: EntityTable<Photo, "id">;
   deductions: EntityTable<Deduction, "id">;
   pistachioTypes: EntityTable<PistachioTypeOption, "id">;
+  appearanceTypes: EntityTable<AppearanceTypeOption, "id">;
 };
 
 db.version(1).stores({
@@ -94,6 +108,31 @@ db.version(4)
       .modify((batch) => {
         if (batch.isConsignment === undefined) {
           batch.isConsignment = false;
+        }
+      });
+  });
+
+db.version(5)
+  .stores({
+    batches: "++id,pistachioType,appearanceType,owner,entryDateJalali,location,status",
+    photos: "++id,batchId",
+    deductions: "++id,batchId,deductedAtJalali",
+    pistachioTypes: "++id,&name",
+    appearanceTypes: "++id,&name",
+  })
+  .upgrade(async (transaction) => {
+    const appearanceTable = transaction.table<AppearanceTypeOption, number>("appearanceTypes");
+
+    if ((await appearanceTable.count()) === 0) {
+      await appearanceTable.bulkAdd(defaultAppearanceTypeNames.map((name) => ({ name })));
+    }
+
+    await transaction
+      .table<Batch, number>("batches")
+      .toCollection()
+      .modify((batch) => {
+        if (batch.appearanceType === undefined) {
+          batch.appearanceType = null;
         }
       });
   });
