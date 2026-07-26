@@ -1845,58 +1845,67 @@ function SearchInventory() {
           </div>
         ) : (
           <section className="grid gap-4">
-            {filteredBatches.map((batch) => (
-              <div
-                className={`relative grid min-h-36 grid-cols-[7rem_1fr] gap-4 rounded-lg border-2 p-3 text-right shadow-sm active:scale-[0.99] sm:grid-cols-[9rem_1fr] ${
-                  isArchived(batch)
-                    ? "border-zinc-300 bg-zinc-100 opacity-85"
-                    : "border-zinc-200 bg-white"
-                }`}
-                key={batch.id}
-                role="button"
-                tabIndex={0}
-                onClick={() => openDetail(batch)}
-                onKeyDown={(event) => handleCardKeyDown(event, batch)}
-              >
-                <BatchBadges batch={batch} className="absolute left-3 top-3" />
-                <BatchThumbnail batch={batch} />
-                <div className="grid content-center gap-2">
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <h2 className="text-2xl font-black">
-                      {batch.pistachioType}
-                    </h2>
-                    {batch.status === "رزرو شده" ? (
-                      <span className="rounded-lg bg-amber-100 px-3 py-1 text-base font-black text-amber-900">
-                        رزرو شده
-                      </span>
-                    ) : null}
+            {filteredBatches.map((batch) => {
+              const isInBasket = orderBasket.some((item) => item.id === batch.id);
+
+              return (
+                <div
+                  className={`relative grid min-h-36 grid-cols-[7rem_1fr] gap-4 rounded-lg border-2 p-3 pb-16 text-right shadow-sm active:scale-[0.99] sm:grid-cols-[9rem_1fr] sm:pb-3 ${
+                    isArchived(batch)
+                      ? "border-zinc-300 bg-zinc-100 opacity-85"
+                      : "border-zinc-200 bg-white"
+                  }`}
+                  key={batch.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openDetail(batch)}
+                  onKeyDown={(event) => handleCardKeyDown(event, batch)}
+                >
+                  <BatchBadges batch={batch} className="absolute left-3 top-3" />
+                  <BatchThumbnail batch={batch} />
+                  <div className="grid content-center gap-2">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <h2 className="text-2xl font-black">
+                        {batch.pistachioType}
+                      </h2>
+                      {batch.status === "رزرو شده" ? (
+                        <span className="rounded-lg bg-amber-100 px-3 py-1 text-base font-black text-amber-900">
+                          رزرو شده
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="text-3xl font-black text-emerald-800">
+                      {formatKg(batch.remainingWeightKg)} کیلو
+                    </p>
+                    <dl className="grid gap-x-3 gap-y-0 text-lg font-semibold leading-7 text-zinc-700 sm:grid-cols-2">
+                      <div>تعداد گونی: {formatKg(batch.sackCount)}</div>
+                      <div>شکل ظاهری: {batch.appearanceType ?? unknownLabel}</div>
+                      <div>مالک: {batch.owner}</div>
+                      <div>مکان: {batch.location || "ثبت نشده"}</div>
+                      <div>تاریخ ورود: {batch.entryDateJalali}</div>
+                    </dl>
                   </div>
-                  <p className="text-3xl font-black text-emerald-800">
-                    {formatKg(batch.remainingWeightKg)} کیلو
-                  </p>
-                  <dl className="grid gap-1 text-lg font-semibold text-zinc-700 sm:grid-cols-2">
-                    <div>تعداد گونی: {formatKg(batch.sackCount)}</div>
-                    <div>شکل ظاهری: {batch.appearanceType ?? unknownLabel}</div>
-                    <div>مالک: {batch.owner}</div>
-                    <div>مکان: {batch.location || "ثبت نشده"}</div>
-                    <div>تاریخ ورود: {batch.entryDateJalali}</div>
-                  </dl>
                   <button
-                    className="mt-2 min-h-12 justify-self-start rounded-lg bg-zinc-950 px-4 text-lg font-black text-white disabled:bg-zinc-400"
+                    className={`absolute bottom-3 left-3 grid min-h-11 min-w-11 place-items-center rounded-full border-2 text-3xl font-black leading-none shadow-sm ${
+                      isInBasket
+                        ? "border-emerald-800 bg-emerald-800 text-white"
+                        : "border-zinc-900 bg-white text-zinc-950"
+                    }`}
                     type="button"
-                    disabled={orderBasket.some((item) => item.id === batch.id)}
+                    aria-label={isInBasket ? "در لیست سفارش" : "افزودن به لیست سفارش"}
+                    aria-pressed={isInBasket}
                     onClick={(event) => {
                       event.stopPropagation();
-                      addBatchToBasket(batch);
+                      if (!isInBasket) {
+                        addBatchToBasket(batch);
+                      }
                     }}
                   >
-                    {orderBasket.some((item) => item.id === batch.id)
-                      ? "در لیست سفارش"
-                      : "افزودن به لیست"}
+                    {isInBasket ? "✓" : "+"}
                   </button>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </section>
         )}
       </section>
