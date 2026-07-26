@@ -7,6 +7,21 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import pistachioPlaceholderUrl from "./assets/pistachio-placeholder.svg";
 import {
   db,
@@ -19,8 +34,14 @@ import {
   type PistachioTypeOption,
 } from "./db";
 
-type Route = "/" | "/search" | "/new-batch" | "/settings";
+type Route = "/" | "/search" | "/new-batch" | "/settings" | "/stats";
 type StatusFilter = "available" | "withReserved" | "withArchive";
+type StatsScreenState = {
+  inventoryByType: { name: string; weightKg: number }[];
+  ownershipSplit: { name: string; value: number }[];
+  monthlyEntries: { month: string; weightKg: number }[];
+  lowStockBatches: Batch[];
+};
 
 type FormErrors = Partial<
   Record<
@@ -119,6 +140,14 @@ const otherPistachioTypeLabel = "سایر";
 const unknownLabel = "نامشخص";
 const anyFilterLabel = "فرقی ندارد";
 const lowStockThresholdKg = 50;
+const chartColors = {
+  emerald: "#065f46",
+  lime: "#84cc16",
+  amber: "#f59e0b",
+  zinc: "#3f3f46",
+  grid: "#d4d4d8",
+  red: "#dc2626",
+};
 const statusFilterOptions: { label: string; value: StatusFilter }[] = [
   { label: "فقط موجود", value: "available" },
   { label: "همراه رزرو", value: "withReserved" },
@@ -176,7 +205,12 @@ function getPhotoDraftsFromBatch(batch: BatchWithPhotos): PhotoDraft[] {
 function getRoute(): Route {
   const path = window.location.pathname;
 
-  if (path === "/search" || path === "/new-batch" || path === "/settings") {
+  if (
+    path === "/search" ||
+    path === "/new-batch" ||
+    path === "/settings" ||
+    path === "/stats"
+  ) {
     return path;
   }
 
@@ -250,6 +284,16 @@ function isLowStock(batch: Batch) {
 
 function isArchived(batch: Batch) {
   return batch.status === "تمام شده";
+}
+
+function getJalaliMonthKey(value: string) {
+  const [year = "", month = ""] = value.split("/");
+
+  if (!year || !month) {
+    return value;
+  }
+
+  return `${year}/${month.padStart(2, "0")}`;
 }
 
 function formatFileSize(bytes: number) {
@@ -520,6 +564,10 @@ export function App() {
     return <SettingsScreen />;
   }
 
+  if (route === "/stats") {
+    return <StatsScreen />;
+  }
+
   return <Home />;
 }
 
@@ -594,9 +642,302 @@ function Home() {
           >
             ثبت بار جدید
           </button>
+          <button
+            className="min-h-14 rounded-lg border-2 border-zinc-300 bg-white px-6 py-4 text-xl font-bold text-zinc-900 shadow-sm transition active:scale-[0.99] sm:text-2xl"
+            type="button"
+            onClick={() => navigateTo("/stats")}
+          >
+            آمار
+          </button>
         </div>
       </section>
     </main>
+  );
+}
+
+function StatsScreen() {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [stats, setStats] = useState<StatsScreenState>({
+    inventoryByType: [],
+    ownershipSplit: [],
+    monthlyEntries: [],
+    lowStockBatches: [],
+  });
+
+  useEffect(() => {
+    let active = true;
+
+    db.batches
+      .toArray()
+      .then((batches) => {
+        if (!active) {
+          return;
+        }
+
+        const availableBatches = batches.filter((batch) => batch.status === "موجود");
+        const inventoryByType = Object.entries(
+          availableBatches.reduce<Record<string, number>>((grouped, batch) => {
+            grouped[batch.pistachioType] =
+              (grouped[batch.pistachioType] ?? 0) + Number(batch.remainingWeightKg || 0);
+            return grouped;
+          }, {}),
+        )
+          .map(([name, weightKg]) => ({ name, weightKg }))
+          .sort((first, second) => second.weightKg - first.weightKg);
+
+        const ownershipTotals = availableBatches.reduce(
+          (grouped, batch) => {
+            const key = batch.isConsignment ? "امانت" : "خرید قطعی";
+            grouped[key] = (grouped[key] ?? 0) + Number(batch.remainingWeightKg || 0);
+            return grouped;
+          },
+          {} as Record<string, number>,
+        );
+        const ownershipSplit = [
+          { name: "امانت", value: ownershipTotals["امانت"] ?? 0 },
+          { name: "خرید قطعی", value: ownershipTotals["خرید قطعی"] ?? 0 },
+        ].filter((item) => item.value > 0);
+
+        const monthlyEntries = Object.entries(
+          batches.reduce<Record<string, number>>((grouped, batch) => {
+            const monthKey = getJalaliMonthKey(batch.entryDateJalali);
+            grouped[monthKey] = (grouped[monthKey] ?? 0) + Number(batch.totalWeightKg || 0);
+            return grouped;
+          }, {}),
+        )
+          .map(([month, weightKg]) => ({ month, weightKg }))
+          .sort((first, second) => first.month.localeCompare(second.month));
+
+        const lowStockBatches = availableBatches
+          .filter((batch) => isLowStock(batch))
+          .sort((first, second) => first.remainingWeightKg - second.remainingWeightKg);
+
+        setStats({
+          inventoryByType,
+          ownershipSplit,
+          monthlyEntries,
+          lowStockBatches,
+        });
+        setLoading(false);
+      })
+      .catch((loadError) => {
+        console.error("Failed to load stats screen", loadError);
+
+        if (!active) {
+          return;
+        }
+
+        setError("خواندن آمار انجام نشد.");
+        setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return (
+    <main className="min-h-screen bg-lime-50 px-4 py-5 text-zinc-950 sm:px-8">
+      <section className="mx-auto grid w-full max-w-6xl gap-5 pb-8">
+        <header className="sticky top-0 z-10 -mx-4 flex items-center justify-between gap-4 border-b border-lime-200 bg-lime-50/95 px-4 py-4 backdrop-blur sm:-mx-8 sm:px-8">
+          <div>
+            <h1 className="text-3xl font-black sm:text-4xl">آمار</h1>
+            <p className="mt-1 text-lg font-semibold text-zinc-600">
+              نمای ساده از موجودی و روند ورود بار
+            </p>
+          </div>
+          <button
+            className="min-h-14 rounded-lg border-2 border-zinc-900 bg-white px-5 text-xl font-black text-zinc-950"
+            type="button"
+            onClick={() => navigateTo("/")}
+          >
+            بازگشت
+          </button>
+        </header>
+
+        {error ? (
+          <div
+            className="rounded-lg border-2 border-red-700 bg-red-50 px-5 py-4 text-2xl font-black text-red-800"
+            role="alert"
+          >
+            {error}
+          </div>
+        ) : null}
+
+        {loading ? (
+          <div className="rounded-lg bg-white px-5 py-8 text-center text-2xl font-black text-zinc-600 shadow-sm">
+            در حال آماده‌سازی آمار...
+          </div>
+        ) : (
+          <section className="grid gap-5">
+            <StatsCard title="موجودی بر اساس نوع پسته">
+              {stats.inventoryByType.length > 0 ? (
+                <div className="h-80 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={stats.inventoryByType} margin={{ top: 12, right: 12, left: 0, bottom: 16 }}>
+                      <CartesianGrid stroke={chartColors.grid} strokeDasharray="4 4" />
+                      <XAxis dataKey="name" tick={{ fontSize: 15 }} interval={0} angle={-10} textAnchor="end" height={54} />
+                      <YAxis tickFormatter={formatKg} tick={{ fontSize: 15 }} width={72} />
+                      <Tooltip content={<StatsTooltip valueLabel="موجودی" unit="کیلو" />} />
+                      <Legend wrapperStyle={{ fontSize: "16px" }} formatter={() => "موجودی باقی‌مانده"} />
+                      <Bar dataKey="weightKg" name="موجودی باقی‌مانده" fill={chartColors.emerald} radius={[8, 8, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <EmptyStatsMessage message="هنوز بار موجودی برای نمایش این نمودار ثبت نشده است." />
+              )}
+            </StatsCard>
+
+            <StatsCard title="نسبت مالکیت">
+              {stats.ownershipSplit.length > 0 ? (
+                <div className="h-80 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Tooltip content={<StatsTooltip valueLabel="موجودی" unit="کیلو" />} />
+                      <Legend wrapperStyle={{ fontSize: "16px" }} />
+                      <Pie
+                        data={stats.ownershipSplit}
+                        dataKey="value"
+                        nameKey="name"
+                        innerRadius={72}
+                        outerRadius={110}
+                        paddingAngle={3}
+                        label={({ name, percent }) =>
+                          `${name} ${new Intl.NumberFormat("fa-IR", {
+                            style: "percent",
+                            maximumFractionDigits: 0,
+                          }).format(percent ?? 0)}`
+                        }
+                        labelLine={false}
+                      >
+                        {stats.ownershipSplit.map((entry, index) => (
+                          <Cell
+                            key={entry.name}
+                            fill={index === 0 ? chartColors.amber : chartColors.zinc}
+                          />
+                        ))}
+                      </Pie>
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <EmptyStatsMessage message="برای موجودی فعلی هنوز داده‌ای برای نسبت مالکیت وجود ندارد." />
+              )}
+            </StatsCard>
+
+            <StatsCard title="روند ورودی ماهانه">
+              {stats.monthlyEntries.length > 0 ? (
+                <div className="h-80 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={stats.monthlyEntries} margin={{ top: 12, right: 12, left: 0, bottom: 8 }}>
+                      <CartesianGrid stroke={chartColors.grid} strokeDasharray="4 4" />
+                      <XAxis dataKey="month" tick={{ fontSize: 15 }} />
+                      <YAxis tickFormatter={formatKg} tick={{ fontSize: 15 }} width={72} />
+                      <Tooltip content={<StatsTooltip valueLabel="ورودی" unit="کیلو" />} />
+                      <Legend wrapperStyle={{ fontSize: "16px" }} formatter={() => "وزن کل ورودی"} />
+                      <Line
+                        type="monotone"
+                        dataKey="weightKg"
+                        name="وزن کل ورودی"
+                        stroke={chartColors.emerald}
+                        strokeWidth={3}
+                        dot={{ r: 5, fill: chartColors.emerald }}
+                        activeDot={{ r: 7 }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <EmptyStatsMessage message="هنوز داده‌ای برای روند ورودی ماهانه ثبت نشده است." />
+              )}
+            </StatsCard>
+
+            <StatsCard title="موجودی کم">
+              {stats.lowStockBatches.length > 0 ? (
+                <ul className="grid gap-3">
+                  {stats.lowStockBatches.map((batch) => (
+                    <li
+                      className="grid gap-2 rounded-lg bg-lime-50 px-4 py-4 text-lg font-bold text-zinc-800 sm:grid-cols-[1fr_auto]"
+                      key={`${batch.id ?? batch.owner}-${batch.entryDateJalali}`}
+                    >
+                      <div className="grid gap-1">
+                        <div className="text-2xl font-black text-zinc-950">
+                          {batch.pistachioType}
+                        </div>
+                        <div>شکل ظاهری: {batch.appearanceType ?? unknownLabel}</div>
+                        <div>مالک: {batch.owner}</div>
+                      </div>
+                      <div className="self-center text-2xl font-black text-red-700">
+                        {formatKg(batch.remainingWeightKg)} کیلو
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xl font-bold text-zinc-600">
+                  در حال حاضر موجودی کمی وجود ندارد
+                </p>
+              )}
+            </StatsCard>
+          </section>
+        )}
+      </section>
+    </main>
+  );
+}
+
+function StatsCard({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="grid gap-4 rounded-lg bg-white p-4 shadow-sm sm:p-5">
+      <h2 className="text-2xl font-black sm:text-3xl">{title}</h2>
+      {children}
+    </section>
+  );
+}
+
+function EmptyStatsMessage({ message }: { message: string }) {
+  return (
+    <div className="grid min-h-52 place-items-center rounded-lg border-2 border-dashed border-zinc-300 bg-zinc-50 px-5 text-center text-xl font-bold text-zinc-600">
+      {message}
+    </div>
+  );
+}
+
+function StatsTooltip({
+  active,
+  payload,
+  label,
+  valueLabel,
+  unit,
+}: {
+  active?: boolean;
+  payload?: Array<{ value?: number; name?: string; payload?: { name?: string } }>;
+  label?: string;
+  valueLabel: string;
+  unit: string;
+}) {
+  if (!active || !payload?.length) {
+    return null;
+  }
+
+  const firstItem = payload[0];
+  const itemLabel = label ?? firstItem.payload?.name ?? firstItem.name ?? "";
+
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-white px-4 py-3 text-base font-bold text-zinc-900 shadow-lg">
+      <div className="mb-1 text-lg font-black">{itemLabel}</div>
+      <div>
+        {valueLabel}: {formatKg(Number(firstItem.value ?? 0))} {unit}
+      </div>
+    </div>
   );
 }
 
