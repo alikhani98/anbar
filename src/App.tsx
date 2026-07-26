@@ -47,7 +47,7 @@ type BackupMetaRecord = {
   iso: string;
   jalaliText: string;
 };
-type FontSizePreset = "normal" | "large" | "extraLarge";
+type FontSizePreset = "small" | "normal" | "large";
 
 type FormErrors = Partial<
   Record<
@@ -161,14 +161,14 @@ const backupReminderThresholdDays = 14;
 const fontSizeMetaKey = "fontSizePreset";
 const defaultFontSizePreset: FontSizePreset = "normal";
 const fontSizeScaleByPreset: Record<FontSizePreset, number> = {
+  small: 75,
   normal: 100,
   large: 115,
-  extraLarge: 130,
 };
 const fontSizeOptions: { label: string; value: FontSizePreset }[] = [
+  { label: "کوچک", value: "small" },
   { label: "عادی", value: "normal" },
   { label: "بزرگ", value: "large" },
-  { label: "خیلی بزرگ", value: "extraLarge" },
 ];
 const statusFilterOptions: { label: string; value: StatusFilter }[] = [
   { label: "فقط موجود", value: "available" },
@@ -325,7 +325,7 @@ function shouldShowBackupReminder(lastBackupMeta: BackupMetaRecord | null) {
 }
 
 function isFontSizePreset(value: string): value is FontSizePreset {
-  return value === "normal" || value === "large" || value === "extraLarge";
+  return value === "small" || value === "normal" || value === "large";
 }
 
 async function loadFontSizePreset() {
