@@ -46,6 +46,11 @@ export interface AppearanceTypeOption {
   defaultImageBlob?: Blob | null;
 }
 
+export interface AppMeta {
+  key: string;
+  value: string;
+}
+
 export const defaultPistachioTypeNames = [
   "احمدآقایی",
   "اکبری",
@@ -68,6 +73,7 @@ export const db = new Dexie("PistachioWarehouseTracker") as Dexie & {
   deductions: EntityTable<Deduction, "id">;
   pistachioTypes: EntityTable<PistachioTypeOption, "id">;
   appearanceTypes: EntityTable<AppearanceTypeOption, "id">;
+  appMeta: EntityTable<AppMeta, "key">;
 };
 
 db.version(1).stores({
@@ -176,3 +182,12 @@ db.version(7)
         }
       });
   });
+
+db.version(8).stores({
+  batches: "++id,pistachioType,appearanceType,owner,entryDateJalali,location,status",
+  photos: "++id,batchId",
+  deductions: "++id,batchId,deductedAtJalali",
+  pistachioTypes: "++id,&name",
+  appearanceTypes: "++id,&name",
+  appMeta: "&key",
+});

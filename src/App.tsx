@@ -25,6 +25,7 @@ import {
 import pistachioPlaceholderUrl from "./assets/pistachio-placeholder.svg";
 import {
   db,
+  type AppMeta,
   defaultAppearanceTypeNames,
   defaultPistachioTypeNames,
   type AppearanceTypeOption,
@@ -46,6 +47,7 @@ type BackupMetaRecord = {
   iso: string;
   jalaliText: string;
 };
+type FontSizePreset = "normal" | "large" | "extraLarge";
 
 type FormErrors = Partial<
   Record<
@@ -123,6 +125,7 @@ type BackupFile = {
   deductions?: BackupDeduction[];
   pistachioTypes?: BackupPistachioType[];
   appearanceTypes?: BackupAppearanceType[];
+  fontSizePreset?: FontSizePreset;
 };
 
 type FormState = {
@@ -155,6 +158,18 @@ const chartColors = {
 const lastBackupStorageKey = "anbar:last-backup-meta";
 const backupReminderDismissKey = "anbar:backup-reminder-dismissed";
 const backupReminderThresholdDays = 14;
+const fontSizeMetaKey = "fontSizePreset";
+const defaultFontSizePreset: FontSizePreset = "normal";
+const fontSizeScaleByPreset: Record<FontSizePreset, number> = {
+  normal: 100,
+  large: 115,
+  extraLarge: 130,
+};
+const fontSizeOptions: { label: string; value: FontSizePreset }[] = [
+  { label: "عادی", value: "normal" },
+  { label: "بزرگ", value: "large" },
+  { label: "خیلی بزرگ", value: "extraLarge" },
+];
 const statusFilterOptions: { label: string; value: StatusFilter }[] = [
   { label: "فقط موجود", value: "available" },
   { label: "همراه رزرو", value: "withReserved" },
@@ -307,6 +322,29 @@ function shouldShowBackupReminder(lastBackupMeta: BackupMetaRecord | null) {
 
   const elapsedDays = (Date.now() - lastBackupMs) / (1000 * 60 * 60 * 24);
   return elapsedDays >= backupReminderThresholdDays;
+}
+
+function isFontSizePreset(value: string): value is FontSizePreset {
+  return value === "normal" || value === "large" || value === "extraLarge";
+}
+
+async function loadFontSizePreset() {
+  const fontSizeMeta = await db.appMeta.get(fontSizeMetaKey);
+
+  if (!fontSizeMeta || !isFontSizePreset(fontSizeMeta.value)) {
+    return defaultFontSizePreset;
+  }
+
+  return fontSizeMeta.value;
+}
+
+async function saveFontSizePreset(value: FontSizePreset) {
+  const nextMeta: AppMeta = {
+    key: fontSizeMetaKey,
+    value,
+  };
+
+  await db.appMeta.put(nextMeta);
 }
 
 function toPersianDigits(value: string | number) {
@@ -645,6 +683,7 @@ function normalizeBackupDeduction(record: unknown): BackupDeduction {
 
 export function App() {
   const [route, setRoute] = useState<Route>(getRoute);
+  const [fontSizePreset, setFontSizePreset] = useState<FontSizePreset>(defaultFontSizePreset);
 
   useEffect(() => {
     const handleRouteChange = () => setRoute(getRoute());
@@ -652,6 +691,30 @@ export function App() {
     window.addEventListener("popstate", handleRouteChange);
     return () => window.removeEventListener("popstate", handleRouteChange);
   }, []);
+
+  useEffect(() => {
+    loadFontSizePreset()
+      .then((savedPreset) => {
+        setFontSizePreset(savedPreset);
+      })
+      .catch((error) => {
+        console.error("Failed to load font size preset", error);
+      });
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.style.fontSize = `${fontSizeScaleByPreset[fontSizePreset]}%`;
+  }, [fontSizePreset]);
+
+  async function handleFontSizePresetChange(nextPreset: FontSizePreset) {
+    setFontSizePreset(nextPreset);
+
+    try {
+      await saveFontSizePreset(nextPreset);
+    } catch (error) {
+      console.error("Failed to save font size preset", error);
+    }
+  }
 
   if (route === "/search") {
     return <SearchInventory />;
@@ -662,7 +725,12 @@ export function App() {
   }
 
   if (route === "/settings") {
-    return <SettingsScreen />;
+    return (
+      <SettingsScreen
+        fontSizePreset={fontSizePreset}
+        onFontSizePresetChange={handleFontSizePresetChange}
+      />
+    );
   }
 
   if (route === "/stats") {
@@ -1099,7 +1167,13 @@ function StatsTooltip({
   );
 }
 
-function SettingsScreen() {
+function SettingsScreen({
+  fontSizePreset,
+  onFontSizePresetChange,
+}: {
+  fontSizePreset: FontSizePreset;
+  onFontSizePresetChange: (value: FontSizePreset) => void | Promise<void>;
+}) {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [restoring, setRestoring] = useState(false);
@@ -1190,6 +1264,7 @@ function SettingsScreen() {
               : null,
           })),
         ),
+        fontSizePreset: await loadFontSizePreset(),
       };
       const json = JSON.stringify(backup, null, 2);
       const url = URL.createObjectURL(
@@ -1318,13 +1393,21 @@ function SettingsScreen() {
 
         return restoredPhoto;
       }));
+      const restoredFontSizePreset =
+        typeof parsed.fontSizePreset === "string" && isFontSizePreset(parsed.fontSizePreset)
+          ? parsed.fontSizePreset
+          : defaultFontSizePreset;
 
-      await db.transaction("rw", db.batches, db.photos, db.deductions, db.pistachioTypes, db.appearanceTypes, async () => {
+      await db.transaction(
+        "rw",
+        [db.batches, db.photos, db.deductions, db.pistachioTypes, db.appearanceTypes, db.appMeta],
+        async () => {
         await db.appearanceTypes.clear();
         await db.pistachioTypes.clear();
         await db.deductions.clear();
         await db.photos.clear();
         await db.batches.clear();
+        await db.appMeta.clear();
 
         if (batches.length > 0) {
           await db.batches.bulkPut(batches);
@@ -1345,10 +1428,16 @@ function SettingsScreen() {
         if (appearanceTypesForRestore.length > 0) {
           await db.appearanceTypes.bulkPut(appearanceTypesForRestore);
         }
-      });
+          await db.appMeta.put({
+            key: fontSizeMetaKey,
+            value: restoredFontSizePreset,
+          });
+        },
+      );
 
       await refreshPistachioTypes();
       await refreshAppearanceTypes();
+      await onFontSizePresetChange(restoredFontSizePreset);
       setMessage(`بازیابی انجام شد. تعداد بارهای بازیابی‌شده: ${formatKg(batches.length)}`);
     } catch (restoreError) {
       console.error("Failed to restore backup", restoreError);
@@ -1707,6 +1796,30 @@ function SettingsScreen() {
           >
             دریافت نسخه پشتیبان
           </button>
+        </section>
+
+        <section className="grid gap-4 rounded-lg bg-white p-4 shadow-sm">
+          <h2 className="text-3xl font-black">اندازه فونت</h2>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {fontSizeOptions.map((option) => {
+              const selected = option.value === fontSizePreset;
+
+              return (
+                <button
+                  className={`min-h-16 rounded-lg border-2 px-4 text-2xl font-black ${
+                    selected
+                      ? "border-emerald-800 bg-emerald-800 text-white"
+                      : "border-zinc-300 bg-white text-zinc-950"
+                  }`}
+                  key={option.value}
+                  type="button"
+                  onClick={() => onFontSizePresetChange(option.value)}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
         </section>
 
         <input
