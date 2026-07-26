@@ -43,6 +43,7 @@ export interface PistachioTypeOption {
 export interface AppearanceTypeOption {
   id?: number;
   name: string;
+  defaultImageBlob?: Blob | null;
 }
 
 export const defaultPistachioTypeNames = [
@@ -149,6 +150,25 @@ db.version(6)
   .upgrade(async (transaction) => {
     await transaction
       .table<PistachioTypeOption, number>("pistachioTypes")
+      .toCollection()
+      .modify((typeOption) => {
+        if (typeOption.defaultImageBlob === undefined) {
+          typeOption.defaultImageBlob = null;
+        }
+      });
+  });
+
+db.version(7)
+  .stores({
+    batches: "++id,pistachioType,appearanceType,owner,entryDateJalali,location,status",
+    photos: "++id,batchId",
+    deductions: "++id,batchId,deductedAtJalali",
+    pistachioTypes: "++id,&name",
+    appearanceTypes: "++id,&name",
+  })
+  .upgrade(async (transaction) => {
+    await transaction
+      .table<AppearanceTypeOption, number>("appearanceTypes")
       .toCollection()
       .modify((typeOption) => {
         if (typeOption.defaultImageBlob === undefined) {

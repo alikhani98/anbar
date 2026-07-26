@@ -84,8 +84,9 @@ type BackupPistachioType = Omit<PistachioTypeOption, "defaultImageBlob"> & {
   defaultImageDataUrl?: string | null;
 };
 
-type BackupAppearanceType = AppearanceTypeOption & {
+type BackupAppearanceType = Omit<AppearanceTypeOption, "defaultImageBlob"> & {
   id?: number;
+  defaultImageDataUrl?: string | null;
 };
 
 type BackupFile = {
@@ -349,6 +350,10 @@ function normalizeBackupAppearanceType(record: unknown): BackupAppearanceType {
   const typeOption = record as Partial<BackupAppearanceType>;
   const normalized: BackupAppearanceType = {
     name: String(typeOption.name ?? "").trim(),
+    defaultImageDataUrl:
+      typeof typeOption.defaultImageDataUrl === "string"
+        ? typeOption.defaultImageDataUrl
+        : null,
   };
 
   if (!normalized.name) {
@@ -664,7 +669,15 @@ function SettingsScreen() {
               : null,
           })),
         ),
-        appearanceTypes: appearanceTypesForBackup.map(normalizeBackupAppearanceType),
+        appearanceTypes: await Promise.all(
+          appearanceTypesForBackup.map(async (typeOption) => ({
+            id: typeOption.id,
+            name: typeOption.name,
+            defaultImageDataUrl: typeOption.defaultImageBlob
+              ? await blobToDataUrl(typeOption.defaultImageBlob)
+              : null,
+          })),
+        ),
       };
       const json = JSON.stringify(backup, null, 2);
       const url = URL.createObjectURL(
@@ -740,8 +753,22 @@ function SettingsScreen() {
           })
         : defaultPistachioTypeNames.map((name) => ({ name, defaultImageBlob: null }));
       const appearanceTypesForRestore = Array.isArray(parsed.appearanceTypes)
-        ? parsed.appearanceTypes.map(normalizeBackupAppearanceType)
-        : defaultAppearanceTypeNames.map((name) => ({ name }));
+        ? parsed.appearanceTypes.map((record) => {
+            const normalized = normalizeBackupAppearanceType(record);
+            const restored: AppearanceTypeOption = {
+              name: normalized.name,
+              defaultImageBlob: normalized.defaultImageDataUrl
+                ? dataUrlToBlob(normalized.defaultImageDataUrl)
+                : null,
+            };
+
+            if (typeof normalized.id === "number") {
+              restored.id = normalized.id;
+            }
+
+            return restored;
+          })
+        : defaultAppearanceTypeNames.map((name) => ({ name, defaultImageBlob: null }));
       const photos = await Promise.all(parsed.photos.map(async (photo) => {
         if (
           !photo ||
@@ -957,6 +984,44 @@ function SettingsScreen() {
     }
   }
 
+  async function updateAppearanceTypeDefaultImage(
+    typeOption: AppearanceTypeOption,
+    file: File | undefined,
+  ) {
+    if (typeOption.id === undefined || !file) {
+      return;
+    }
+
+    clearSettingsMessages();
+
+    try {
+      const defaultImageBlob = await prepareDefaultImageForStorage(file);
+      await db.appearanceTypes.update(typeOption.id, { defaultImageBlob });
+      await refreshAppearanceTypes();
+      setMessage("تصویر پیش‌فرض شکل ظاهری ذخیره شد.");
+    } catch (imageError) {
+      console.error("Failed to update appearance type default image", imageError);
+      setError("ذخیره تصویر پیش‌فرض انجام نشد. لطفا تصویر دیگری انتخاب کنید.");
+    }
+  }
+
+  async function removeAppearanceTypeDefaultImage(typeOption: AppearanceTypeOption) {
+    if (typeOption.id === undefined) {
+      return;
+    }
+
+    clearSettingsMessages();
+
+    try {
+      await db.appearanceTypes.update(typeOption.id, { defaultImageBlob: null });
+      await refreshAppearanceTypes();
+      setMessage("تصویر پیش‌فرض شکل ظاهری حذف شد.");
+    } catch (imageError) {
+      console.error("Failed to remove appearance type default image", imageError);
+      setError("حذف تصویر پیش‌فرض انجام نشد.");
+    }
+  }
+
   async function addAppearanceType() {
     const name = newAppearanceType.trim();
     clearSettingsMessages();
@@ -1135,8 +1200,9 @@ function SettingsScreen() {
                 className="grid gap-3 rounded-lg border-2 border-zinc-200 p-3 sm:grid-cols-[auto_1fr_auto_auto]"
                 key={typeOption.id ?? typeOption.name}
               >
-                <PistachioTypeDefaultImageControl
+                <DefaultTypeImageControl
                   typeOption={typeOption}
+                  imageAlt="تصویر پیش‌فرض نوع پسته"
                   onRemove={() => removePistachioTypeDefaultImage(typeOption)}
                   onSelect={(file) => updatePistachioTypeDefaultImage(typeOption, file)}
                 />
@@ -1220,9 +1286,16 @@ function SettingsScreen() {
           <div className="grid gap-3">
             {appearanceTypeOptions.map((typeOption) => (
               <div
-                className="grid gap-3 rounded-lg border-2 border-zinc-200 p-3 sm:grid-cols-[1fr_auto_auto]"
+                className="grid gap-3 rounded-lg border-2 border-zinc-200 p-3 sm:grid-cols-[auto_1fr_auto_auto]"
                 key={typeOption.id ?? typeOption.name}
               >
+                <DefaultTypeImageControl
+                  typeOption={typeOption}
+                  imageAlt="تصویر پیش‌فرض شکل ظاهری"
+                  onRemove={() => removeAppearanceTypeDefaultImage(typeOption)}
+                  onSelect={(file) => updateAppearanceTypeDefaultImage(typeOption, file)}
+                />
+
                 {editingAppearanceId === typeOption.id ? (
                   <input
                     className="min-h-14 rounded-lg border-2 border-zinc-300 bg-white px-4 text-2xl font-semibold outline-none focus:border-emerald-800"
@@ -1291,12 +1364,14 @@ function SettingsScreen() {
   );
 }
 
-function PistachioTypeDefaultImageControl({
+function DefaultTypeImageControl({
   typeOption,
+  imageAlt,
   onRemove,
   onSelect,
 }: {
-  typeOption: PistachioTypeOption;
+  typeOption: { defaultImageBlob?: Blob | null };
+  imageAlt: string;
   onRemove: () => void;
   onSelect: (file: File | undefined) => void;
 }) {
@@ -1321,7 +1396,7 @@ function PistachioTypeDefaultImageControl({
         <img
           className="h-20 w-20 rounded-lg object-cover"
           src={imageUrl}
-          alt="تصویر پیش‌فرض نوع پسته"
+          alt={imageAlt}
         />
       ) : (
         <PlaceholderPhoto className="h-20 w-20" />
@@ -1402,8 +1477,21 @@ function SearchInventory() {
     const deductions = batchIds.length
       ? await db.deductions.where("batchId").anyOf(batchIds).toArray()
       : [];
-    const pistachioTypesWithDefaults = await db.pistachioTypes.toArray();
+    const [pistachioTypesWithDefaults, appearanceTypesWithDefaults] = await Promise.all([
+      db.pistachioTypes.toArray(),
+      db.appearanceTypes.toArray(),
+    ]);
     const defaultImageByType = pistachioTypesWithDefaults.reduce<Record<string, Blob>>(
+      (mapped, typeOption) => {
+        if (typeOption.defaultImageBlob) {
+          mapped[typeOption.name] = typeOption.defaultImageBlob;
+        }
+
+        return mapped;
+      },
+      {},
+    );
+    const defaultImageByAppearance = appearanceTypesWithDefaults.reduce<Record<string, Blob>>(
       (mapped, typeOption) => {
         if (typeOption.defaultImageBlob) {
           mapped[typeOption.name] = typeOption.defaultImageBlob;
@@ -1448,7 +1536,11 @@ function SearchInventory() {
         const photoUrls = photoItems.map((photo) => photo.fullUrl);
         const thumbnailUrls = photoItems.map((photo) => photo.thumbnailUrl);
         const defaultImageBlob =
-          photoItems.length === 0 ? defaultImageByType[batch.pistachioType] : undefined;
+          photoItems.length === 0
+            ? (batch.appearanceType
+                ? defaultImageByAppearance[batch.appearanceType]
+                : undefined) ?? defaultImageByType[batch.pistachioType]
+            : undefined;
         const defaultImageUrl = defaultImageBlob
           ? URL.createObjectURL(defaultImageBlob)
           : undefined;
@@ -2100,7 +2192,7 @@ function BatchDetail({
               <img
                 className="h-64 min-w-64 rounded-lg object-cover"
                 src={batch.defaultImageUrl}
-                alt="تصویر پیش‌فرض نوع پسته"
+                alt="تصویر پیش‌فرض بار"
               />
             ) : (
               <PlaceholderPhoto className="h-64 min-w-64" />
@@ -2276,7 +2368,7 @@ function CustomerDisplayView({
               <img
                 className="h-[54vh] min-w-full snap-center rounded-lg object-contain sm:h-[62vh]"
                 src={batch.defaultImageUrl}
-                alt="تصویر پیش‌فرض نوع پسته"
+                alt="تصویر پیش‌فرض بار"
               />
             ) : (
               <PlaceholderPhoto className="h-[54vh] min-w-full sm:h-[62vh]" />
