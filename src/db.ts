@@ -12,6 +12,7 @@ export interface Batch {
   sackCount: number;
   remainingWeightKg: number;
   owner: string;
+  isConsignment: boolean;
   entryDateJalali: string;
   location: string;
   notes: string;
@@ -77,4 +78,22 @@ db.version(3)
     if ((await table.count()) === 0) {
       await table.bulkAdd(defaultPistachioTypeNames.map((name) => ({ name })));
     }
+  });
+
+db.version(4)
+  .stores({
+    batches: "++id,pistachioType,owner,entryDateJalali,location,status",
+    photos: "++id,batchId",
+    deductions: "++id,batchId,deductedAtJalali",
+    pistachioTypes: "++id,&name",
+  })
+  .upgrade(async (transaction) => {
+    await transaction
+      .table<Batch, number>("batches")
+      .toCollection()
+      .modify((batch) => {
+        if (batch.isConsignment === undefined) {
+          batch.isConsignment = false;
+        }
+      });
   });

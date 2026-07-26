@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type KeyboardEvent,
   type ReactNode,
 } from "react";
 import {
@@ -97,6 +98,7 @@ type FormState = {
   totalWeightKg: string;
   sackCount: string;
   owner: string;
+  isConsignment: boolean;
   entryDateJalali: string;
   location: string;
   notes: string;
@@ -105,6 +107,7 @@ type FormState = {
 const otherPistachioTypeLabel = "سایر";
 const unknownLabel = "نامشخص";
 const anyFilterLabel = "فرقی ندارد";
+const lowStockThresholdKg = 50;
 const grades = ["اعلا", "معمولی", unknownLabel];
 const gradeFilters = [anyFilterLabel, ...grades];
 
@@ -117,6 +120,7 @@ const initialFormState: FormState = {
   totalWeightKg: "",
   sackCount: "",
   owner: "",
+  isConsignment: false,
   entryDateJalali: getTodayJalali(),
   location: "",
   notes: "",
@@ -134,6 +138,7 @@ function getFormStateFromBatch(batch: Batch, typeNames = defaultPistachioTypeNam
     totalWeightKg: String(batch.totalWeightKg),
     sackCount: String(batch.sackCount),
     owner: batch.owner,
+    isConsignment: batch.isConsignment ?? false,
     entryDateJalali: batch.entryDateJalali,
     location: batch.location,
     notes: batch.notes,
@@ -223,6 +228,10 @@ function formatOptionalNumber(value: number | null | undefined) {
 
 function formatOptionalPercent(value: number | null | undefined) {
   return value == null ? unknownLabel : `${formatKg(value)}٪`;
+}
+
+function isLowStock(batch: Batch) {
+  return batch.remainingWeightKg < lowStockThresholdKg;
 }
 
 function formatFileSize(bytes: number) {
@@ -386,6 +395,7 @@ function normalizeBackupBatch(record: unknown): BackupBatch {
     sackCount: Number(batch.sackCount ?? 0),
     remainingWeightKg: Number(batch.remainingWeightKg ?? 0),
     owner: String(batch.owner ?? ""),
+    isConsignment: Boolean(batch.isConsignment ?? false),
     entryDateJalali: String(batch.entryDateJalali ?? ""),
     location: String(batch.location ?? ""),
     notes: String(batch.notes ?? ""),
@@ -450,6 +460,38 @@ export function App() {
 }
 
 function Home() {
+  const [availableBatchCount, setAvailableBatchCount] = useState(0);
+  const [availableWeightKg, setAvailableWeightKg] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+
+    db.batches
+      .where("status")
+      .equals("موجود")
+      .toArray()
+      .then((availableBatches) => {
+        if (!active) {
+          return;
+        }
+
+        setAvailableBatchCount(availableBatches.length);
+        setAvailableWeightKg(
+          availableBatches.reduce(
+            (sum, batch) => sum + Number(batch.remainingWeightKg || 0),
+            0,
+          ),
+        );
+      })
+      .catch((error) => {
+        console.error("Failed to load home stats", error);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
   return (
     <main className="min-h-screen bg-lime-50 px-5 py-8 text-zinc-950 sm:px-8">
       <button
@@ -466,6 +508,10 @@ function Home() {
           </h1>
           <p className="mt-4 text-xl font-semibold text-zinc-700">
             مدیریت موجودی فیزیکی انبار
+          </p>
+          <p className="mt-5 rounded-lg bg-white px-4 py-3 text-xl font-black text-zinc-700 shadow-sm">
+            بارهای موجود: {formatKg(availableBatchCount)} | موجودی کل:{" "}
+            {formatKg(availableWeightKg)} کیلو
           </p>
         </div>
 
@@ -919,9 +965,15 @@ function SettingsScreen() {
 function SearchInventory() {
   const [pistachioType, setPistachioType] = useState("");
   const [grade, setGrade] = useState(anyFilterLabel);
+  const [ownerFilter, setOwnerFilter] = useState("");
+  const [ownerSuggestions, setOwnerSuggestions] = useState<string[]>([]);
+  const [consignmentFilter, setConsignmentFilter] = useState(anyFilterLabel);
+  const [showMoreFilters, setShowMoreFilters] = useState(false);
   const [pistachioTypeOptions, setPistachioTypeOptions] = useState<string[]>([]);
   const [showReserved, setShowReserved] = useState(false);
   const [batches, setBatches] = useState<BatchWithPhotos[]>([]);
+  const [orderBasket, setOrderBasket] = useState<BatchWithPhotos[]>([]);
+  const [basketOpen, setBasketOpen] = useState(true);
   const [selectedBatch, setSelectedBatch] = useState<BatchWithPhotos | null>(null);
   const [editingBatch, setEditingBatch] = useState<BatchWithPhotos | null>(null);
   const [deductAmount, setDeductAmount] = useState("");
@@ -960,7 +1012,7 @@ function SearchInventory() {
     photoUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     photoUrlsRef.current = [];
 
-    const nextBatches = availableBatches
+    const nextBatches: BatchWithPhotos[] = availableBatches
       .filter((batch): batch is Batch & { id: number } => batch.id !== undefined)
       .sort(sortByOldestEntry)
       .map((batch) => {
@@ -999,6 +1051,11 @@ function SearchInventory() {
     setEditingBatch((current) =>
       current ? nextBatches.find((batch) => batch.id === current.id) ?? null : null,
     );
+    setOrderBasket((current) =>
+      current
+        .map((basketBatch) => nextBatches.find((batch) => batch.id === basketBatch.id))
+        .filter((batch): batch is BatchWithPhotos => batch !== undefined),
+    );
     return nextBatches;
   }
 
@@ -1014,14 +1071,20 @@ function SearchInventory() {
   useEffect(() => {
     let active = true;
 
-    loadPistachioTypeOptions()
-      .then((options) => {
+    Promise.all([loadPistachioTypeOptions(), db.batches.orderBy("owner").uniqueKeys()])
+      .then(([options, owners]) => {
         if (active) {
           setPistachioTypeOptions(options.map((option) => option.name));
+          setOwnerSuggestions(
+            owners
+              .map(String)
+              .filter(Boolean)
+              .sort((a, b) => a.localeCompare(b, "fa")),
+          );
         }
       })
       .catch((error) => {
-        console.error("Failed to load pistachio types", error);
+        console.error("Failed to load search filter options", error);
       });
 
     return () => {
@@ -1030,6 +1093,8 @@ function SearchInventory() {
   }, []);
 
   const filteredBatches = useMemo(() => {
+    const ownerQuery = ownerFilter.trim();
+
     return batches.filter((batch) => {
       const typeMatches =
         !pistachioType ||
@@ -1037,10 +1102,27 @@ function SearchInventory() {
           ? !pistachioTypeOptions.includes(batch.pistachioType)
           : batch.pistachioType === pistachioType);
       const gradeMatches = grade === anyFilterLabel || batch.grade === grade;
+      const ownerMatches = !ownerQuery || batch.owner.includes(ownerQuery);
+      const consignmentMatches =
+        consignmentFilter === anyFilterLabel ||
+        (consignmentFilter === "امانت" ? batch.isConsignment : !batch.isConsignment);
 
-      return typeMatches && gradeMatches;
+      return typeMatches && gradeMatches && ownerMatches && consignmentMatches;
     });
-  }, [batches, grade, pistachioType, pistachioTypeOptions]);
+  }, [batches, consignmentFilter, grade, ownerFilter, pistachioType, pistachioTypeOptions]);
+
+  const filteredOwnerSuggestions = useMemo(() => {
+    const query = ownerFilter.trim();
+
+    if (!query) {
+      return ownerSuggestions.slice(0, 6);
+    }
+
+    return ownerSuggestions
+      .filter((owner) => owner.includes(query))
+      .filter((owner) => owner !== query)
+      .slice(0, 6);
+  }, [ownerFilter, ownerSuggestions]);
 
   async function confirmDeduction() {
     if (!selectedBatch) {
@@ -1086,6 +1168,28 @@ function SearchInventory() {
     setDetailNotice("");
   }
 
+  function addBatchToBasket(batch: BatchWithPhotos) {
+    setOrderBasket((current) => {
+      if (current.some((item) => item.id === batch.id)) {
+        return current;
+      }
+
+      return [...current, batch];
+    });
+    setBasketOpen(true);
+  }
+
+  function removeBatchFromBasket(batchId: number) {
+    setOrderBasket((current) => current.filter((batch) => batch.id !== batchId));
+  }
+
+  function handleCardKeyDown(event: KeyboardEvent<HTMLDivElement>, batch: BatchWithPhotos) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openDetail(batch);
+    }
+  }
+
   async function handleEditSaved(batchId: number) {
     const nextBatches = await loadBatches();
     const updatedBatch = nextBatches.find((batch) => batch.id === batchId) ?? null;
@@ -1106,7 +1210,7 @@ function SearchInventory() {
 
   return (
     <main className="min-h-screen bg-lime-50 px-4 py-5 text-zinc-950 sm:px-8">
-      <section className="mx-auto grid w-full max-w-5xl gap-5 pb-10">
+      <section className="mx-auto grid w-full max-w-5xl gap-5 pb-56">
         <header className="sticky top-0 z-10 -mx-4 flex items-center justify-between gap-4 border-b border-lime-200 bg-lime-50/95 px-4 py-4 backdrop-blur sm:-mx-8 sm:px-8">
           <h1 className="text-3xl font-black">جستجوی موجودی</h1>
           <button
@@ -1130,6 +1234,52 @@ function SearchInventory() {
           <Field label="درجه">
             <ChipGroup options={gradeFilters} value={grade} onChange={setGrade} />
           </Field>
+
+          <section className="grid gap-3">
+            <button
+              className="min-h-12 justify-self-start rounded-lg border-2 border-zinc-300 bg-white px-4 text-base font-black text-zinc-800"
+              type="button"
+              onClick={() => setShowMoreFilters((current) => !current)}
+            >
+              {showMoreFilters ? "بستن فیلترهای بیشتر" : "فیلترهای بیشتر"}
+            </button>
+
+            {showMoreFilters ? (
+              <div className="grid gap-4 rounded-lg bg-white p-4 shadow-sm">
+                <Field label="مالک">
+                  <input
+                    className="min-h-14 w-full rounded-lg border-2 border-zinc-300 bg-white px-4 text-xl font-semibold outline-none focus:border-emerald-800"
+                    type="text"
+                    value={ownerFilter}
+                    onChange={(event) => setOwnerFilter(event.target.value)}
+                    placeholder="نام مالک"
+                  />
+                  {filteredOwnerSuggestions.length > 0 ? (
+                    <div className="mt-3 flex flex-wrap gap-3">
+                      {filteredOwnerSuggestions.map((owner) => (
+                        <button
+                          className="min-h-12 rounded-lg border-2 border-zinc-300 bg-white px-4 text-lg font-bold text-zinc-950"
+                          key={owner}
+                          type="button"
+                          onClick={() => setOwnerFilter(owner)}
+                        >
+                          {owner}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </Field>
+
+                <Field label="امانت">
+                  <ChipGroup
+                    options={[anyFilterLabel, "امانت", "غیر امانت"]}
+                    value={consignmentFilter}
+                    onChange={setConsignmentFilter}
+                  />
+                </Field>
+              </div>
+            ) : null}
+          </section>
 
           <button
             className={`min-h-12 justify-self-start rounded-lg border-2 px-4 text-base font-black ${
@@ -1159,12 +1309,15 @@ function SearchInventory() {
         ) : (
           <section className="grid gap-4">
             {filteredBatches.map((batch) => (
-              <button
-                className="grid min-h-36 grid-cols-[7rem_1fr] gap-4 rounded-lg border-2 border-zinc-200 bg-white p-3 text-right shadow-sm active:scale-[0.99] sm:grid-cols-[9rem_1fr]"
+              <div
+                className="relative grid min-h-36 grid-cols-[7rem_1fr] gap-4 rounded-lg border-2 border-zinc-200 bg-white p-3 text-right shadow-sm active:scale-[0.99] sm:grid-cols-[9rem_1fr]"
                 key={batch.id}
-                type="button"
+                role="button"
+                tabIndex={0}
                 onClick={() => openDetail(batch)}
+                onKeyDown={(event) => handleCardKeyDown(event, batch)}
               >
+                <BatchBadges batch={batch} className="absolute left-3 top-3" />
                 <BatchThumbnail batch={batch} />
                 <div className="grid content-center gap-2">
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -1186,12 +1339,33 @@ function SearchInventory() {
                     <div>مکان: {batch.location || "ثبت نشده"}</div>
                     <div>تاریخ ورود: {batch.entryDateJalali}</div>
                   </dl>
+                  <button
+                    className="mt-2 min-h-12 justify-self-start rounded-lg bg-zinc-950 px-4 text-lg font-black text-white disabled:bg-zinc-400"
+                    type="button"
+                    disabled={orderBasket.some((item) => item.id === batch.id)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      addBatchToBasket(batch);
+                    }}
+                  >
+                    {orderBasket.some((item) => item.id === batch.id)
+                      ? "در لیست سفارش"
+                      : "افزودن به لیست"}
+                  </button>
                 </div>
-              </button>
+              </div>
             ))}
           </section>
         )}
       </section>
+
+      <OrderBasketPanel
+        batches={orderBasket}
+        open={basketOpen}
+        onClear={() => setOrderBasket([])}
+        onOpenChange={setBasketOpen}
+        onRemove={removeBatchFromBasket}
+      />
 
       {selectedBatch ? (
         <BatchDetail
@@ -1242,6 +1416,113 @@ function BatchThumbnail({ batch }: { batch: BatchWithPhotos }) {
   );
 }
 
+function BatchBadges({ batch, className = "" }: { batch: Batch; className?: string }) {
+  const badges = [
+    batch.isConsignment
+      ? {
+          label: "امانت",
+          className: "bg-amber-200 text-amber-950 ring-1 ring-amber-500",
+        }
+      : null,
+    isLowStock(batch)
+      ? {
+          label: "موجودی کم",
+          className: "bg-red-100 text-red-800 ring-1 ring-red-600",
+        }
+      : null,
+  ].filter((badge): badge is { label: string; className: string } => badge !== null);
+
+  if (badges.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className={`flex flex-wrap gap-2 ${className}`}>
+      {badges.map((badge) => (
+        <span
+          className={`rounded-lg px-3 py-1 text-base font-black ${badge.className}`}
+          key={badge.label}
+        >
+          {badge.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function OrderBasketPanel({
+  batches,
+  open,
+  onClear,
+  onOpenChange,
+  onRemove,
+}: {
+  batches: BatchWithPhotos[];
+  open: boolean;
+  onClear: () => void;
+  onOpenChange: (open: boolean) => void;
+  onRemove: (batchId: number) => void;
+}) {
+  return (
+    <aside className="fixed inset-x-0 bottom-0 z-10 border-t-2 border-zinc-200 bg-white/95 px-4 py-3 shadow-2xl backdrop-blur sm:px-8">
+      <div className="mx-auto grid max-w-5xl gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <button
+            className="min-h-12 rounded-lg border-2 border-zinc-300 bg-white px-4 text-xl font-black text-zinc-950"
+            type="button"
+            onClick={() => onOpenChange(!open)}
+          >
+            لیست سفارش فعلی ({formatKg(batches.length)})
+          </button>
+          {batches.length > 0 ? (
+            <button
+              className="min-h-12 rounded-lg border-2 border-red-700 bg-white px-4 text-lg font-black text-red-800"
+              type="button"
+              onClick={onClear}
+            >
+              پاک کردن لیست
+            </button>
+          ) : null}
+        </div>
+
+        {open ? (
+          batches.length > 0 ? (
+            <ul className="grid max-h-56 gap-2 overflow-y-auto">
+              {batches.map((batch) => (
+                <li
+                  className="grid gap-2 rounded-lg bg-lime-50 px-3 py-2 text-lg font-bold text-zinc-800 sm:grid-cols-[1fr_auto]"
+                  key={batch.id}
+                >
+                  <div>
+                    <span className="font-black text-zinc-950">
+                      {batch.pistachioType} - {batch.grade}
+                    </span>
+                    <span className="mx-2">|</span>
+                    <span>{formatKg(batch.remainingWeightKg)} کیلو</span>
+                    <span className="mx-2">|</span>
+                    <span>مالک: {batch.owner}</span>
+                  </div>
+                  <button
+                    className="min-h-10 rounded-lg bg-red-700 px-3 text-base font-black text-white"
+                    type="button"
+                    onClick={() => onRemove(batch.id)}
+                  >
+                    حذف
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-lg font-bold text-zinc-600">
+              هنوز باری به لیست سفارش اضافه نشده است.
+            </p>
+          )
+        ) : null}
+      </div>
+    </aside>
+  );
+}
+
 function BatchDetail({
   batch,
   deductAmount,
@@ -1267,6 +1548,7 @@ function BatchDetail({
 }) {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [showDeductions, setShowDeductions] = useState(false);
+  const [showCustomerView, setShowCustomerView] = useState(false);
   const hasMultiplePhotos = batch.photoUrls.length > 1;
 
   function showPreviousPhoto() {
@@ -1289,12 +1571,25 @@ function BatchDetail({
     });
   }
 
+  if (showCustomerView) {
+    return (
+      <CustomerDisplayView batch={batch} onBack={() => setShowCustomerView(false)} />
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-20 overflow-y-auto bg-lime-50 px-4 py-5 text-zinc-950 sm:px-8">
       <section className="mx-auto grid w-full max-w-4xl gap-5 pb-8">
         <header className="sticky top-0 z-10 -mx-4 flex items-center justify-between gap-4 border-b border-lime-200 bg-lime-50/95 px-4 py-4 backdrop-blur sm:-mx-8 sm:px-8">
           <h1 className="text-3xl font-black">جزئیات بار</h1>
           <div className="flex gap-3">
+            <button
+              className="min-h-14 rounded-lg bg-zinc-950 px-5 text-xl font-black text-white"
+              type="button"
+              onClick={() => setShowCustomerView(true)}
+            >
+              نمایش به مشتری
+            </button>
             <button
               className="min-h-14 rounded-lg bg-emerald-800 px-5 text-xl font-black text-white"
               type="button"
@@ -1317,6 +1612,8 @@ function BatchDetail({
             {notice}
           </div>
         ) : null}
+
+        <BatchBadges batch={batch} />
 
         <section className="flex gap-4 overflow-x-auto pb-2">
           {batch.photoUrls.length > 0 ? (
@@ -1353,6 +1650,7 @@ function BatchDetail({
           />
           <DetailRow label="تعداد گونی" value={formatKg(batch.sackCount)} />
           <DetailRow label="مالک" value={batch.owner} />
+          <DetailRow label="امانت" value={batch.isConsignment ? "بله" : "خیر"} />
           <DetailRow label="تاریخ ورود" value={batch.entryDateJalali} />
           <DetailRow label="مکان" value={batch.location || "ثبت نشده"} wide />
           <DetailRow label="توضیحات" value={batch.notes || "ندارد"} wide />
@@ -1469,6 +1767,70 @@ function BatchDetail({
   );
 }
 
+function CustomerDisplayView({
+  batch,
+  onBack,
+}: {
+  batch: BatchWithPhotos;
+  onBack: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-40 overflow-y-auto bg-zinc-950 px-4 py-5 text-white sm:px-8">
+      <button
+        className="fixed left-4 top-4 z-10 min-h-11 rounded-lg bg-white/90 px-4 text-base font-black text-zinc-950"
+        type="button"
+        onClick={onBack}
+      >
+        بازگشت
+      </button>
+
+      <section className="mx-auto grid min-h-screen w-full max-w-5xl content-center gap-6 pb-6 pt-16">
+        <div className="flex snap-x snap-mandatory gap-4 overflow-x-auto pb-2">
+          {batch.photoUrls.length > 0 ? (
+            batch.photoUrls.map((url) => (
+              <img
+                className="h-[54vh] min-w-full snap-center rounded-lg object-contain sm:h-[62vh]"
+                src={url}
+                alt="عکس بار"
+                key={url}
+              />
+            ))
+          ) : (
+            <div className="grid h-[54vh] min-w-full place-items-center rounded-lg bg-lime-100 text-8xl font-black text-emerald-800 sm:h-[62vh]">
+              پ
+            </div>
+          )}
+        </div>
+
+        <section className="grid gap-4 rounded-lg bg-white px-5 py-5 text-zinc-950 sm:grid-cols-2">
+          <div>
+            <div className="text-lg font-black text-zinc-500">نوع پسته</div>
+            <div className="text-4xl font-black">{batch.pistachioType}</div>
+          </div>
+          <div>
+            <div className="text-lg font-black text-zinc-500">درجه</div>
+            <div className="text-4xl font-black">{batch.grade}</div>
+          </div>
+          <div>
+            <div className="text-lg font-black text-zinc-500">انس</div>
+            <div className="text-4xl font-black">{formatOptionalNumber(batch.ounceGrade)}</div>
+          </div>
+          <div>
+            <div className="text-lg font-black text-zinc-500">درصد مغز</div>
+            <div className="text-4xl font-black">{formatOptionalPercent(batch.kernelPercent)}</div>
+          </div>
+          <div className="sm:col-span-2">
+            <div className="text-lg font-black text-zinc-500">باقیمانده</div>
+            <div className="text-5xl font-black text-emerald-800">
+              {formatKg(batch.remainingWeightKg)} کیلو
+            </div>
+          </div>
+        </section>
+      </section>
+    </div>
+  );
+}
+
 function DetailRow({
   label,
   value,
@@ -1544,6 +1906,7 @@ function NewBatchForm({
       form.totalWeightKg !== "" ||
       form.sackCount !== "" ||
       form.owner !== "" ||
+      form.isConsignment !== initialFormState.isConsignment ||
       form.entryDateJalali !== initialFormState.entryDateJalali ||
       form.location !== "" ||
       form.notes !== "" ||
@@ -1707,6 +2070,7 @@ function NewBatchForm({
         sackCount: normalizeNumber(form.sackCount),
         remainingWeightKg: editingBatch?.remainingWeightKg ?? totalWeightKg,
         owner: form.owner.trim(),
+        isConsignment: form.isConsignment,
         entryDateJalali: form.entryDateJalali.trim(),
         location: form.location.trim(),
         notes: form.notes.trim(),
@@ -1723,6 +2087,7 @@ function NewBatchForm({
             totalWeightKg: batchFields.totalWeightKg,
             sackCount: batchFields.sackCount,
             owner: batchFields.owner,
+            isConsignment: batchFields.isConsignment,
             entryDateJalali: batchFields.entryDateJalali,
             location: batchFields.location,
             notes: batchFields.notes,
@@ -1964,6 +2329,15 @@ function NewBatchForm({
               ))}
             </div>
           ) : null}
+          <label className="mt-3 flex min-h-16 items-center gap-4 rounded-lg border-2 border-amber-300 bg-amber-50 px-4 text-2xl font-black text-amber-950">
+            <input
+              className="h-8 w-8 accent-amber-600"
+              type="checkbox"
+              checked={form.isConsignment}
+              onChange={(event) => updateField("isConsignment", event.target.checked)}
+            />
+            <span>امانت</span>
+          </label>
         </Field>
 
         <Field label="تاریخ ورود" error={errors.entryDateJalali}>
