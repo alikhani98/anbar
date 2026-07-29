@@ -35,7 +35,7 @@ import {
   type PistachioTypeOption,
 } from "./db";
 
-type Route = "/" | "/search" | "/new-batch" | "/settings" | "/stats";
+type Route = "/" | "/search" | "/new-batch" | "/quick-add" | "/settings" | "/stats";
 type StatusFilter = "available" | "withReserved" | "withArchive";
 type StatsScreenState = {
   inventoryByType: { name: string; weightKg: number }[];
@@ -138,6 +138,7 @@ type FormState = {
   sackCount: string;
   owner: string;
   isConsignment: boolean;
+  isLeftover: boolean;
   entryDateJalali: string;
   location: string;
   notes: string;
@@ -186,9 +187,16 @@ const initialFormState: FormState = {
   sackCount: "",
   owner: "",
   isConsignment: false,
+  isLeftover: false,
   entryDateJalali: getTodayJalali(),
   location: "",
   notes: "",
+};
+
+const quickAddInitialFormState: FormState = {
+  ...initialFormState,
+  sackCount: "1",
+  isLeftover: true,
 };
 
 function getFormStateFromBatch(batch: Batch, typeNames = defaultPistachioTypeNames): FormState {
@@ -204,6 +212,7 @@ function getFormStateFromBatch(batch: Batch, typeNames = defaultPistachioTypeNam
     sackCount: String(batch.sackCount),
     owner: batch.owner,
     isConsignment: batch.isConsignment ?? false,
+    isLeftover: batch.isLeftover ?? false,
     entryDateJalali: batch.entryDateJalali,
     location: batch.location,
     notes: batch.notes,
@@ -230,6 +239,7 @@ function getRoute(): Route {
   if (
     path === "/search" ||
     path === "/new-batch" ||
+    path === "/quick-add" ||
     path === "/settings" ||
     path === "/stats"
   ) {
@@ -643,6 +653,7 @@ function normalizeBackupBatch(record: unknown): BackupBatch {
     remainingWeightKg: Number(batch.remainingWeightKg ?? 0),
     owner: String(batch.owner ?? ""),
     isConsignment: Boolean(batch.isConsignment ?? false),
+    isLeftover: Boolean(batch.isLeftover ?? false),
     entryDateJalali: String(batch.entryDateJalali ?? ""),
     location: String(batch.location ?? ""),
     notes: String(batch.notes ?? ""),
@@ -722,6 +733,10 @@ export function App() {
 
   if (route === "/new-batch") {
     return <NewBatchForm />;
+  }
+
+  if (route === "/quick-add") {
+    return <NewBatchForm quickAdd />;
   }
 
   if (route === "/settings") {
@@ -855,6 +870,13 @@ function Home() {
             onClick={() => navigateTo("/new-batch")}
           >
             ثبت بار جدید
+          </button>
+          <button
+            className="min-h-16 rounded-lg border-2 border-emerald-800 bg-white px-6 py-5 text-2xl font-bold text-emerald-900 shadow-sm transition active:scale-[0.99] sm:text-3xl"
+            type="button"
+            onClick={() => navigateTo("/quick-add")}
+          >
+            ثبت سریع
           </button>
           <button
             className="min-h-14 rounded-lg border-2 border-zinc-300 bg-white px-6 py-4 text-xl font-bold text-zinc-900 shadow-sm transition active:scale-[0.99] sm:text-2xl"
@@ -2106,6 +2128,7 @@ function SearchInventory() {
   const [ownerFilter, setOwnerFilter] = useState("");
   const [ownerSuggestions, setOwnerSuggestions] = useState<string[]>([]);
   const [consignmentFilter, setConsignmentFilter] = useState(anyFilterLabel);
+  const [leftoverFilter, setLeftoverFilter] = useState(anyFilterLabel);
   const [showMoreFilters, setShowMoreFilters] = useState(false);
   const [pistachioTypeOptions, setPistachioTypeOptions] = useState<string[]>([]);
   const [appearanceTypeOptions, setAppearanceTypeOptions] = useState<string[]>([]);
@@ -2297,13 +2320,17 @@ function SearchInventory() {
       const consignmentMatches =
         consignmentFilter === anyFilterLabel ||
         (consignmentFilter === "امانت" ? batch.isConsignment : !batch.isConsignment);
+      const leftoverMatches =
+        leftoverFilter === anyFilterLabel ||
+        (leftoverFilter === "ته‌مانده" ? batch.isLeftover : !batch.isLeftover);
 
-      return typeMatches && appearanceMatches && ownerMatches && consignmentMatches;
+      return typeMatches && appearanceMatches && ownerMatches && consignmentMatches && leftoverMatches;
     });
   }, [
     appearanceFilter,
     batches,
     consignmentFilter,
+    leftoverFilter,
     ownerFilter,
     pistachioType,
     pistachioTypeOptions,
@@ -2484,6 +2511,14 @@ function SearchInventory() {
                     options={[anyFilterLabel, "امانت", "غیر امانت"]}
                     value={consignmentFilter}
                     onChange={setConsignmentFilter}
+                  />
+                </Field>
+
+                <Field label="ته‌مانده">
+                  <ChipGroup
+                    options={[anyFilterLabel, "ته‌مانده", "غیر ته‌مانده"]}
+                    value={leftoverFilter}
+                    onChange={setLeftoverFilter}
                   />
                 </Field>
               </div>
@@ -2771,6 +2806,12 @@ function BatchBadges({ batch, className = "" }: { batch: Batch; className?: stri
       ? {
           label: "امانت",
           className: "bg-amber-200 text-amber-950 ring-1 ring-amber-500",
+        }
+      : null,
+    batch.isLeftover
+      ? {
+          label: "ته‌مانده",
+          className: "bg-sky-100 text-sky-900 ring-1 ring-sky-400",
         }
       : null,
     isLowStock(batch)
@@ -3238,18 +3279,25 @@ function DetailRow({
 
 function NewBatchForm({
   editingBatch,
+  quickAdd,
   onEditCancel,
   onEditDeleted,
   onEditSaved,
 }: {
   editingBatch?: BatchWithPhotos;
+  quickAdd?: boolean;
   onEditCancel?: () => void;
   onEditDeleted?: () => void;
   onEditSaved?: (batchId: number) => void | Promise<void>;
 } = {}) {
   const isEditing = editingBatch !== undefined;
+  const isQuickAdd = quickAdd === true && !isEditing;
   const [form, setForm] = useState<FormState>(() =>
-    editingBatch ? getFormStateFromBatch(editingBatch) : initialFormState,
+    editingBatch
+      ? getFormStateFromBatch(editingBatch)
+      : isQuickAdd
+        ? quickAddInitialFormState
+        : initialFormState,
   );
   const [errors, setErrors] = useState<FormErrors>({});
   const [ownerSuggestions, setOwnerSuggestions] = useState<string[]>([]);
@@ -3270,8 +3318,10 @@ function NewBatchForm({
   const [saveError, setSaveError] = useState("");
   const [photoProcessing, setPhotoProcessing] = useState(false);
   const [compressionSummary, setCompressionSummary] = useState("");
+  const [quickAddNotice, setQuickAddNotice] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const photosRef = useRef<PhotoDraft[]>([]);
+  const emptyFormState = isQuickAdd ? quickAddInitialFormState : initialFormState;
 
   const selectedPistachioType =
     form.pistachioType === otherPistachioTypeLabel
@@ -3305,19 +3355,20 @@ function NewBatchForm({
     return (
       form.pistachioType !== "" ||
       form.customPistachioType !== "" ||
-      form.appearanceType !== initialFormState.appearanceType ||
+      form.appearanceType !== emptyFormState.appearanceType ||
       form.ounceGrade !== "" ||
       form.kernelPercent !== "" ||
       form.totalWeightKg !== "" ||
-      form.sackCount !== "" ||
+      form.sackCount !== emptyFormState.sackCount ||
       form.owner !== "" ||
-      form.isConsignment !== initialFormState.isConsignment ||
-      form.entryDateJalali !== initialFormState.entryDateJalali ||
+      form.isConsignment !== emptyFormState.isConsignment ||
+      form.isLeftover !== emptyFormState.isLeftover ||
+      form.entryDateJalali !== emptyFormState.entryDateJalali ||
       form.location !== "" ||
       form.notes !== "" ||
       photos.length > 0
     );
-  }, [form, photos.length]);
+  }, [emptyFormState, form, photos.length]);
 
   useEffect(() => {
     let active = true;
@@ -3379,6 +3430,7 @@ function NewBatchForm({
     setForm((current) => ({ ...current, [key]: value }));
     setErrors((current) => ({ ...current, [key]: undefined }));
     setSaveError("");
+    setQuickAddNotice("");
   }
 
   function updateNumberField(
@@ -3435,7 +3487,7 @@ function NewBatchForm({
       nextErrors.sackCount = "تعداد گونی باید بیشتر از صفر باشد.";
     }
 
-    if (!form.owner.trim()) {
+    if (!isQuickAdd && !form.owner.trim()) {
       nextErrors.owner = "نام مالک را وارد کنید.";
     }
 
@@ -3475,6 +3527,7 @@ function NewBatchForm({
         remainingWeightKg: editingBatch?.remainingWeightKg ?? totalWeightKg,
         owner: form.owner.trim(),
         isConsignment: form.isConsignment,
+        isLeftover: form.isLeftover,
         entryDateJalali: form.entryDateJalali.trim(),
         location: form.location.trim(),
         notes: form.notes.trim(),
@@ -3492,6 +3545,7 @@ function NewBatchForm({
             sackCount: batchFields.sackCount,
             owner: batchFields.owner,
             isConsignment: batchFields.isConsignment,
+            isLeftover: batchFields.isLeftover,
             entryDateJalali: batchFields.entryDateJalali,
             location: batchFields.location,
             notes: batchFields.notes,
@@ -3530,6 +3584,21 @@ function NewBatchForm({
 
       if (isEditing && editingBatch) {
         await onEditSaved?.(editingBatch.id);
+        return;
+      }
+
+      if (isQuickAdd) {
+        setQuickAddNotice("بار ثبت شد و فرم برای مورد بعدی آماده است.");
+        setForm(quickAddInitialFormState);
+        setErrors({});
+        setPhotos((current) => {
+          current.forEach((photo) => {
+            URL.revokeObjectURL(photo.fullUrl);
+            URL.revokeObjectURL(photo.thumbnailUrl);
+          });
+          return [];
+        });
+        setCompressionSummary("");
         return;
       }
 
@@ -3658,7 +3727,7 @@ function NewBatchForm({
       <form className="mx-auto grid w-full max-w-3xl gap-6 pb-28" onSubmit={handleSubmit}>
         <header className="sticky top-0 z-10 -mx-4 flex flex-col items-stretch gap-4 border-b border-lime-200 bg-lime-50/95 px-4 py-4 backdrop-blur sm:-mx-8 sm:flex-row sm:items-center sm:justify-between sm:px-8">
           <h1 className="text-3xl font-black">
-            {isEditing ? "ویرایش بار" : "ثبت بار جدید"}
+            {isEditing ? "ویرایش بار" : isQuickAdd ? "ثبت سریع" : "ثبت بار جدید"}
           </h1>
           <button
             className="min-h-16 rounded-lg border-2 border-red-700 bg-white px-6 text-2xl font-black text-red-800"
@@ -3675,6 +3744,15 @@ function NewBatchForm({
             role="alert"
           >
             {saveError}
+          </div>
+        ) : null}
+
+        {quickAddNotice ? (
+          <div
+            className="rounded-lg border-2 border-emerald-700 bg-emerald-50 px-5 py-4 text-2xl font-black text-emerald-900"
+            role="status"
+          >
+            {quickAddNotice}
           </div>
         ) : null}
 
@@ -3708,33 +3786,37 @@ function NewBatchForm({
           ) : null}
         </Field>
 
-        <Field label="شکل ظاهری">
-          <ChipGroup
-            options={appearanceChipOptions}
-            value={form.appearanceType}
-            onChange={(value) => updateField("appearanceType", value)}
-          />
-        </Field>
+        {!isQuickAdd ? (
+          <>
+            <Field label="شکل ظاهری">
+              <ChipGroup
+                options={appearanceChipOptions}
+                value={form.appearanceType}
+                onChange={(value) => updateField("appearanceType", value)}
+              />
+            </Field>
 
-        <NumberField
-          label="انس"
-          value={form.ounceGrade}
-          error={errors.ounceGrade}
-          onChange={(value) => updateField("ounceGrade", value)}
-          onMinus={() => updateNumberField("ounceGrade", -1, 0)}
-          onPlus={() => updateNumberField("ounceGrade", 1, 0)}
-        />
+            <NumberField
+              label="انس"
+              value={form.ounceGrade}
+              error={errors.ounceGrade}
+              onChange={(value) => updateField("ounceGrade", value)}
+              onMinus={() => updateNumberField("ounceGrade", -1, 0)}
+              onPlus={() => updateNumberField("ounceGrade", 1, 0)}
+            />
 
-        <NumberField
-          label="درصد مغز"
-          value={form.kernelPercent}
-          error={errors.kernelPercent}
-          max={100}
-          min={0}
-          onChange={(value) => updateField("kernelPercent", value)}
-          onMinus={() => updateNumberField("kernelPercent", -1, 0, 100)}
-          onPlus={() => updateNumberField("kernelPercent", 1, 0, 100)}
-        />
+            <NumberField
+              label="درصد مغز"
+              value={form.kernelPercent}
+              error={errors.kernelPercent}
+              max={100}
+              min={0}
+              onChange={(value) => updateField("kernelPercent", value)}
+              onMinus={() => updateNumberField("kernelPercent", -1, 0, 100)}
+              onPlus={() => updateNumberField("kernelPercent", 1, 0, 100)}
+            />
+          </>
+        ) : null}
 
         <NumberField
           label="وزن کل"
@@ -3754,46 +3836,73 @@ function NewBatchForm({
           onPlus={() => updateNumberField("sackCount", 1, 0)}
         />
 
-        <Field label="مالک" error={errors.owner}>
-          <input
-            className="min-h-16 w-full rounded-lg border-2 border-zinc-300 bg-white px-4 text-2xl font-semibold outline-none focus:border-emerald-800"
-            type="text"
-            value={form.owner}
-            onChange={(event) => updateField("owner", event.target.value)}
-            placeholder="نام مالک"
-          />
-          {filteredOwnerSuggestions.length > 0 ? (
-            <div className="mt-3 flex flex-wrap gap-3">
-              {filteredOwnerSuggestions.map((owner) => (
-                <button
-                  className="min-h-14 rounded-lg border-2 border-zinc-300 bg-white px-5 text-xl font-bold text-zinc-950"
-                  key={owner}
-                  type="button"
-                  onClick={() => updateField("owner", owner)}
-                >
-                  {owner}
-                </button>
-              ))}
-            </div>
-          ) : null}
-          <label className="mt-3 flex min-h-16 items-center gap-4 rounded-lg border-2 border-amber-300 bg-amber-50 px-4 text-2xl font-black text-amber-950">
-            <input
-              className="h-8 w-8 accent-amber-600"
-              type="checkbox"
-              checked={form.isConsignment}
-              onChange={(event) => updateField("isConsignment", event.target.checked)}
-            />
-            <span>امانت</span>
-          </label>
-        </Field>
+        {!isQuickAdd ? (
+          <>
+            <Field label="مالک" error={errors.owner}>
+              <input
+                className="min-h-16 w-full rounded-lg border-2 border-zinc-300 bg-white px-4 text-2xl font-semibold outline-none focus:border-emerald-800"
+                type="text"
+                value={form.owner}
+                onChange={(event) => updateField("owner", event.target.value)}
+                placeholder="نام مالک"
+              />
+              {filteredOwnerSuggestions.length > 0 ? (
+                <div className="mt-3 flex flex-wrap gap-3">
+                  {filteredOwnerSuggestions.map((owner) => (
+                    <button
+                      className="min-h-14 rounded-lg border-2 border-zinc-300 bg-white px-5 text-xl font-bold text-zinc-950"
+                      key={owner}
+                      type="button"
+                      onClick={() => updateField("owner", owner)}
+                    >
+                      {owner}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <label className="flex min-h-16 items-center gap-4 rounded-lg border-2 border-amber-300 bg-amber-50 px-4 text-2xl font-black text-amber-950">
+                  <input
+                    className="h-8 w-8 accent-amber-600"
+                    type="checkbox"
+                    checked={form.isConsignment}
+                    onChange={(event) => updateField("isConsignment", event.target.checked)}
+                  />
+                  <span>امانت</span>
+                </label>
+                <label className="flex min-h-16 items-center gap-4 rounded-lg border-2 border-sky-300 bg-sky-50 px-4 text-2xl font-black text-sky-950">
+                  <input
+                    className="h-8 w-8 accent-sky-600"
+                    type="checkbox"
+                    checked={form.isLeftover}
+                    onChange={(event) => updateField("isLeftover", event.target.checked)}
+                  />
+                  <span>ته‌مانده</span>
+                </label>
+              </div>
+            </Field>
 
-        <Field label="تاریخ ورود" error={errors.entryDateJalali}>
-          <JalaliDatePicker
-            value={form.entryDateJalali}
-            onChange={(part, value) => updateDatePart(part, value)}
-            onToday={() => updateField("entryDateJalali", getTodayJalali())}
-          />
-        </Field>
+            <Field label="تاریخ ورود" error={errors.entryDateJalali}>
+              <JalaliDatePicker
+                value={form.entryDateJalali}
+                onChange={(part, value) => updateDatePart(part, value)}
+                onToday={() => updateField("entryDateJalali", getTodayJalali())}
+              />
+            </Field>
+          </>
+        ) : (
+          <Field label="وضعیت">
+            <label className="flex min-h-16 items-center gap-4 rounded-lg border-2 border-sky-300 bg-sky-50 px-4 text-2xl font-black text-sky-950">
+              <input
+                className="h-8 w-8 accent-sky-600"
+                type="checkbox"
+                checked={form.isLeftover}
+                onChange={(event) => updateField("isLeftover", event.target.checked)}
+              />
+              <span>ته‌مانده</span>
+            </label>
+          </Field>
+        )}
 
         <Field label="مکان">
           <input
@@ -3805,57 +3914,61 @@ function NewBatchForm({
           />
         </Field>
 
-        <Field label="توضیحات">
-          <textarea
-            className="min-h-32 w-full rounded-lg border-2 border-zinc-300 bg-white px-4 py-3 text-2xl font-semibold outline-none focus:border-emerald-800"
-            value={form.notes}
-            onChange={(event) => updateField("notes", event.target.value)}
-            placeholder="اختیاری"
-          />
-        </Field>
+        {!isQuickAdd ? (
+          <>
+            <Field label="توضیحات">
+              <textarea
+                className="min-h-32 w-full rounded-lg border-2 border-zinc-300 bg-white px-4 py-3 text-2xl font-semibold outline-none focus:border-emerald-800"
+                value={form.notes}
+                onChange={(event) => updateField("notes", event.target.value)}
+                placeholder="اختیاری"
+              />
+            </Field>
 
-        <Field label="عکس‌ها">
-          <input
-            ref={fileInputRef}
-            className="hidden"
-            type="file"
-            accept="image/*"
-            capture="environment"
-            multiple
-            onChange={(event) => handlePhotoSelection(event.target.files)}
-          />
-          <button
-            className="min-h-16 w-full rounded-lg bg-zinc-950 px-6 text-2xl font-black text-white disabled:bg-zinc-500"
-            type="button"
-            disabled={photoProcessing}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            {photoProcessing ? "در حال آماده‌سازی عکس..." : "گرفتن عکس"}
-          </button>
-          {compressionSummary ? (
-            <p className="text-lg font-bold text-emerald-800">{compressionSummary}</p>
-          ) : null}
-          {photos.length > 0 ? (
-            <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3">
-              {photos.map((photo) => (
-                <div className="overflow-hidden rounded-lg border-2 border-zinc-200 bg-white" key={photo.id}>
-                  <img
-                    className="h-36 w-full object-cover"
-                    src={photo.thumbnailUrl}
-                    alt="عکس بار"
-                  />
-                  <button
-                    className="min-h-14 w-full bg-red-700 px-3 text-xl font-black text-white"
-                    type="button"
-                    onClick={() => removePhoto(photo.id)}
-                  >
-                    حذف / گرفتن دوباره
-                  </button>
+            <Field label="عکس‌ها">
+              <input
+                ref={fileInputRef}
+                className="hidden"
+                type="file"
+                accept="image/*"
+                capture="environment"
+                multiple
+                onChange={(event) => handlePhotoSelection(event.target.files)}
+              />
+              <button
+                className="min-h-16 w-full rounded-lg bg-zinc-950 px-6 text-2xl font-black text-white disabled:bg-zinc-500"
+                type="button"
+                disabled={photoProcessing}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {photoProcessing ? "در حال آماده‌سازی عکس..." : "گرفتن عکس"}
+              </button>
+              {compressionSummary ? (
+                <p className="text-lg font-bold text-emerald-800">{compressionSummary}</p>
+              ) : null}
+              {photos.length > 0 ? (
+                <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3">
+                  {photos.map((photo) => (
+                    <div className="overflow-hidden rounded-lg border-2 border-zinc-200 bg-white" key={photo.id}>
+                      <img
+                        className="h-36 w-full object-cover"
+                        src={photo.thumbnailUrl}
+                        alt="عکس بار"
+                      />
+                      <button
+                        className="min-h-14 w-full bg-red-700 px-3 text-xl font-black text-white"
+                        type="button"
+                        onClick={() => removePhoto(photo.id)}
+                      >
+                        حذف / گرفتن دوباره
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          ) : null}
-        </Field>
+              ) : null}
+            </Field>
+          </>
+        ) : null}
 
         <button
           className="fixed inset-x-4 bottom-4 mx-auto min-h-16 max-w-3xl rounded-lg bg-emerald-800 px-6 text-2xl font-black text-white shadow-lg disabled:bg-zinc-500"
@@ -3864,11 +3977,13 @@ function NewBatchForm({
         >
           {photoProcessing
             ? "در حال آماده‌سازی عکس..."
-            : saving
-              ? "در حال ذخیره..."
-              : isEditing
-                ? "ذخیره ویرایش"
-                : "ذخیره بار"}
+              : saving
+                ? "در حال ذخیره..."
+                : isEditing
+                  ? "ذخیره ویرایش"
+                  : isQuickAdd
+                    ? "ثبت و بعدی"
+                    : "ذخیره بار"}
         </button>
       </form>
 

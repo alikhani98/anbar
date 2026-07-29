@@ -13,6 +13,7 @@ export interface Batch {
   remainingWeightKg: number;
   owner: string;
   isConsignment: boolean;
+  isLeftover: boolean;
   entryDateJalali: string;
   location: string;
   notes: string;
@@ -191,3 +192,23 @@ db.version(8).stores({
   appearanceTypes: "++id,&name",
   appMeta: "&key",
 });
+
+db.version(9)
+  .stores({
+    batches: "++id,pistachioType,appearanceType,owner,entryDateJalali,location,status",
+    photos: "++id,batchId",
+    deductions: "++id,batchId,deductedAtJalali",
+    pistachioTypes: "++id,&name",
+    appearanceTypes: "++id,&name",
+    appMeta: "&key",
+  })
+  .upgrade(async (transaction) => {
+    await transaction
+      .table<Batch, number>("batches")
+      .toCollection()
+      .modify((batch) => {
+        if (batch.isLeftover === undefined) {
+          batch.isLeftover = false;
+        }
+      });
+  });
