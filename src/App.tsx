@@ -4080,7 +4080,6 @@ function JalaliDatePicker({
           aria-label="سال"
           className="min-h-16 min-w-0 rounded-lg border-2 border-zinc-300 bg-white px-3 text-center text-2xl font-black outline-none focus:border-emerald-800"
           inputMode="numeric"
-          pattern="[۰-۹0-9]{4}"
           type="tel"
           maxLength={4}
           value={formatDisplayText(year)}
@@ -4092,7 +4091,6 @@ function JalaliDatePicker({
           aria-label="ماه"
           className="min-h-16 min-w-0 rounded-lg border-2 border-zinc-300 bg-white px-3 text-center text-2xl font-black outline-none focus:border-emerald-800"
           inputMode="numeric"
-          pattern="[0-9۰-۹]*"
           type="tel"
           maxLength={2}
           value={formatDisplayText(month)}
@@ -4104,7 +4102,6 @@ function JalaliDatePicker({
           aria-label="روز"
           className="min-h-16 min-w-0 rounded-lg border-2 border-zinc-300 bg-white px-3 text-center text-2xl font-black outline-none focus:border-emerald-800"
           inputMode="numeric"
-          pattern="[0-9۰-۹]*"
           type="tel"
           maxLength={2}
           value={formatDisplayText(day)}
